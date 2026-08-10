@@ -119,6 +119,24 @@ async function handleBlob(request: Request, env: Env, roomId: string): Promise<R
   })
 }
 
+async function handleDeleteRoom(request: Request, env: Env, roomId: string): Promise<Response> {
+  let body: { authKey?: string }
+  try {
+    body = (await request.json()) as typeof body
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 })
+  }
+  if (!body.authKey) return Response.json({ error: 'auth_key_required' }, { status: 400 })
+  const res = await roomStub(env, roomId).fetch('https://do/delete', {
+    method: 'POST',
+    body: JSON.stringify({ authKeyHash: await hashAuthKey(body.authKey) }),
+  })
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 async function handleWebSocket(request: Request, env: Env, roomId: string): Promise<Response> {
   const token = new URL(request.url).searchParams.get('token') ?? ''
   if (!(await verifyToken(token, roomId, env.TOKEN_SECRET, Date.now()))) {
@@ -140,6 +158,9 @@ export default {
 
     const enterMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/enter$/)
     if (enterMatch && request.method === 'POST') return handleEnterRoom(request, env, enterMatch[1])
+
+    const roomMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})$/)
+    if (roomMatch && request.method === 'DELETE') return handleDeleteRoom(request, env, roomMatch[1])
 
     const wsMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/ws$/)
     if (wsMatch) return handleWebSocket(request, env, wsMatch[1])

@@ -10,6 +10,7 @@ export class Room extends DurableObject {
     if (url.pathname === '/blob' && request.method === 'GET') return this.handleGetBlob()
     if (url.pathname === '/blob' && request.method === 'PUT') return this.handlePutBlob(request)
     if (url.pathname === '/ws') return this.handleWebSocket()
+    if (url.pathname === '/delete') return this.handleDelete(request)
     return new Response('Not Found', { status: 404 })
   }
 
@@ -173,8 +174,41 @@ export class Room extends DurableObject {
     return JSON.stringify(rows)
   }
 
+  private async handleDelete(request: Request): Promise<Response> {
+    this.ensureSchema()
+    const auth = this.get<{ authKeyHash: string }>('auth')
+    if (auth === null) return Response.json({ error: 'not_found' }, { status: 404 })
+    const body = (await request.json()) as { authKeyHash: string }
+    if (!constantTimeEquals(body.authKeyHash, auth.authKeyHash)) {
+      return Response.json({ error: 'invalid_key' }, { status: 401 })
+    }
+    await this.destroy()
+    return Response.json({ ok: true })
+  }
+
+  private async destroy(): Promise<void> {
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.deleteAll()
+  }
+
   async alarm(): Promise<void> {
-    // Task 11 で実装する
+    this.ensureSchema()
+    const meta = this.get<RoomMeta>('meta')
+    if (meta === null) return
+    if (Date.now() - meta.lastAccessAt >= ROOM_TTL_MS) {
+      await this.destroy()
+      return
+    }
+    // まだ使われているので次の期限へ再設定する
+    await this.ctx.storage.setAlarm(meta.lastAccessAt + ROOM_TTL_MS)
+  }
+
+  /** テスト専用。lastAccessAt を任意の時刻に書き換える */
+  async setLastAccessForTest(at: number): Promise<void> {
+    this.ensureSchema()
+    const meta = this.get<RoomMeta>('meta')
+    if (meta === null) return
+    this.put('meta', { ...meta, lastAccessAt: at })
   }
 }
 
