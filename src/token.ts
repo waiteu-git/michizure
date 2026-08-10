@@ -53,7 +53,10 @@ export async function verifyToken(
   const [tokenRoomId, expiresAt, sig] = parts
   if (tokenRoomId !== roomId) return false
   const expiry = Number(expiresAt)
-  if (!Number.isFinite(expiry) || now > expiry) return false
+  // ⚠ now にも有限性を課す。課さないと NaN との比較が常に false になり、
+  // 【期限の判定だけが素通りする】＝この関数で唯一 fail-open な分岐になる。
+  // 呼び出し側の契約違反（NaN・undefined・非数値）は、他の分岐と同じく必ず落とす
+  if (!Number.isFinite(expiry) || !Number.isFinite(now) || now > expiry) return false
   const expected = await sign(`${tokenRoomId}.${expiresAt}`, secret)
   if (expected.length !== sig.length) return false
   let diff = 0

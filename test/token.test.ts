@@ -36,6 +36,21 @@ describe('アクセストークン', () => {
     expect(await verifyToken(t, 'ROOM9999ROOM9999', SECRET, NOW)).toBe(false)
   })
 
+  // 🔴 この関数の分岐は全て「怪しければ false」に倒れているのに、
+  // 期限の比較だけが逆向きだった。NaN との比較は常に false になるため、
+  // now が NaN だと期限判定が実行されずに素通りする。
+  // 現在の呼び出しは全て Date.now() なので届かないが、now を引数で受ける以上、
+  // リクエスト由来の値を Number() で通した瞬間に期限が無効化される
+  it('now が数値として壊れていたら、期限切れを通さない', async () => {
+    const t = await issueToken('ROOM0000ROOM0000', SECRET, 60_000, NOW)
+    for (const broken of [NaN, undefined, null, 'abc', Infinity, -Infinity]) {
+      expect(await verifyToken(t, 'ROOM0000ROOM0000', SECRET, broken as number)).toBe(false)
+    }
+    // 正常系は変わらない
+    expect(await verifyToken(t, 'ROOM0000ROOM0000', SECRET, NOW + 1000)).toBe(true)
+    expect(await verifyToken(t, 'ROOM0000ROOM0000', SECRET, NOW + 60_001)).toBe(false)
+  })
+
   it('改ざんされたトークンを拒否する', async () => {
     const t = await issueToken('ROOM0000ROOM0000', SECRET, 60_000, NOW)
     const tampered = t.slice(0, -1) + (t.endsWith('A') ? 'B' : 'A')
