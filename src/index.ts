@@ -1,4 +1,4 @@
-import { generateRoomId, issueToken } from './token'
+import { generateRoomId, issueToken, verifyToken } from './token'
 import { toBase64 } from './keys'
 import { MAX_BLOB_BYTES, TOKEN_TTL_MS, type Blob } from './types'
 
@@ -83,6 +83,42 @@ async function handleEnterRoom(request: Request, env: Env, roomId: string): Prom
   return Response.json({ token: await issueToken(roomId, env.TOKEN_SECRET, TOKEN_TTL_MS, now) })
 }
 
+async function authorize(request: Request, env: Env, roomId: string): Promise<boolean> {
+  const header = request.headers.get('Authorization') ?? ''
+  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+  return token ? verifyToken(token, roomId, env.TOKEN_SECRET, Date.now()) : false
+}
+
+async function handleBlob(request: Request, env: Env, roomId: string): Promise<Response> {
+  if (!(await authorize(request, env, roomId))) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 })
+  }
+  let body: string | undefined
+  if (request.method === 'PUT') {
+    body = await request.text()
+    // 生の本文での足切り。巨大な本文を JSON.parse しないための安い防御
+    if (body.length > MAX_BLOB_BYTES * 2) {
+      return Response.json({ error: 'blob_too_large' }, { status: 413 })
+    }
+    let parsed: Blob | undefined
+    try {
+      parsed = JSON.parse(body) as Blob
+    } catch {
+      return Response.json({ error: 'invalid_json' }, { status: 400 })
+    }
+    // 判定は作成時（handleCreateRoom）と同じ blobTooLarge で行う。
+    // ここだけ別の基準にすると「作成では 413 なのに更新では通る」穴ができる
+    if (blobTooLarge(parsed)) {
+      return Response.json({ error: 'blob_too_large' }, { status: 413 })
+    }
+  }
+  const res = await roomStub(env, roomId).fetch('https://do/blob', { method: request.method, body })
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
@@ -96,6 +132,11 @@ export default {
 
     const enterMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/enter$/)
     if (enterMatch && request.method === 'POST') return handleEnterRoom(request, env, enterMatch[1])
+
+    const blobMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/blob$/)
+    if (blobMatch && (request.method === 'GET' || request.method === 'PUT')) {
+      return handleBlob(request, env, blobMatch[1])
+    }
 
     return new Response('Not Found', { status: 404 })
   },

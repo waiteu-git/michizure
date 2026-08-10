@@ -7,6 +7,8 @@ export class Room extends DurableObject {
     if (url.pathname === '/create') return this.handleCreate(request)
     if (url.pathname === '/salt') return this.handleSalt()
     if (url.pathname === '/enter') return this.handleEnter(request)
+    if (url.pathname === '/blob' && request.method === 'GET') return this.handleGetBlob()
+    if (url.pathname === '/blob' && request.method === 'PUT') return this.handlePutBlob(request)
     return new Response('Not Found', { status: 404 })
   }
 
@@ -90,6 +92,27 @@ export class Room extends DurableObject {
     const meta = this.get<RoomMeta>('meta')!
     this.put('meta', { ...meta, lastAccessAt: body.now })
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
+    return Response.json({ ok: true })
+  }
+
+  private handleGetBlob(): Response {
+    this.ensureSchema()
+    const blob = this.get<Blob>('blob')
+    if (blob === null) return Response.json({ error: 'not_found' }, { status: 404 })
+    return Response.json(blob)
+  }
+
+  private async handlePutBlob(request: Request): Promise<Response> {
+    this.ensureSchema()
+    if (this.get<Blob>('blob') === null) {
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
+    // 中身は読まない。読めない。サイズだけ見る
+    const blob = (await request.json()) as Blob
+    if (typeof blob?.ciphertext !== 'string' || typeof blob?.iv !== 'string') {
+      return Response.json({ error: 'invalid_blob' }, { status: 400 })
+    }
+    this.put('blob', blob)
     return Response.json({ ok: true })
   }
 
