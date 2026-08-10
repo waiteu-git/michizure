@@ -13,6 +13,17 @@ new_sqlite_classes = ["Room"]
 [limits]
 cpu_ms = 50
 
+# 🔴 消してはいけない。新規 Worker では observability は【既定で有効】であり、
+# 書かないと Cloudflare 側にログが保存される（無料プランで3日保持）。
+# invocation log に何が含まれるかの公式なフィールド一覧は公開されておらず、
+# 同じトレース基盤の tail handler ではリクエストヘッダが載る。その redaction 対象は
+# cookie / auth / key / secret / token / jwt のみで cf-connecting-ip は【対象外】。
+# ⇒「IPが載らない」ことを確認する手段が無いので、ログ自体を取らない側に倒す。
+# 設計 §7.5・§11（保存する内容を正確に書く）に対応する。
+# この行が消えたら `npm test` の pretest（scripts/check-privacy-config.mjs）が落ちる。
+[observability]
+enabled = false
+
 # 開発専用。本番は `wrangler secret put TOKEN_SECRET` で上書きすること。
 # この値が本番で使われるとアクセストークンを誰でも偽造できる
 [vars]
