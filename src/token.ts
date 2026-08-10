@@ -1,0 +1,52 @@
+import { toBase64 } from './keys'
+
+const enc = new TextEncoder()
+// Crockford base32 から I / L / O / U を除いた文字集合。読み間違いを避ける
+const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+export function generateRoomId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  let out = ''
+  for (let i = 0; i < 16; i++) out += ALPHABET[bytes[i] % ALPHABET.length]
+  return out
+}
+
+async function sign(payload: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  return toBase64(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(payload))))
+}
+
+export async function issueToken(
+  roomId: string,
+  secret: string,
+  ttlMs: number,
+  now: number,
+): Promise<string> {
+  const payload = `${roomId}.${now + ttlMs}`
+  return `${payload}.${await sign(payload, secret)}`
+}
+
+export async function verifyToken(
+  token: string,
+  roomId: string,
+  secret: string,
+  now: number,
+): Promise<boolean> {
+  const parts = token.split('.')
+  if (parts.length !== 3) return false
+  const [tokenRoomId, expiresAt, sig] = parts
+  if (tokenRoomId !== roomId) return false
+  const expiry = Number(expiresAt)
+  if (!Number.isFinite(expiry) || now > expiry) return false
+  const expected = await sign(`${tokenRoomId}.${expiresAt}`, secret)
+  if (expected.length !== sig.length) return false
+  let diff = 0
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i)
+  return diff === 0
+}
