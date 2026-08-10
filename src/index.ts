@@ -119,6 +119,14 @@ async function handleBlob(request: Request, env: Env, roomId: string): Promise<R
   })
 }
 
+async function handleWebSocket(request: Request, env: Env, roomId: string): Promise<Response> {
+  const token = new URL(request.url).searchParams.get('token') ?? ''
+  if (!(await verifyToken(token, roomId, env.TOKEN_SECRET, Date.now()))) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 })
+  }
+  return roomStub(env, roomId).fetch('https://do/ws', { headers: request.headers })
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
@@ -132,6 +140,9 @@ export default {
 
     const enterMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/enter$/)
     if (enterMatch && request.method === 'POST') return handleEnterRoom(request, env, enterMatch[1])
+
+    const wsMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/ws$/)
+    if (wsMatch) return handleWebSocket(request, env, wsMatch[1])
 
     const blobMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/blob$/)
     if (blobMatch && (request.method === 'GET' || request.method === 'PUT')) {

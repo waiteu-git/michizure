@@ -11,6 +11,16 @@ export function generateRoomId(): string {
   return out
 }
 
+/**
+ * 🔴 base64url にする理由。トークンは WebSocket 接続でクエリ文字列に載せるしかない
+ * （ブラウザは WS のハンドシェイクにヘッダを付けられない）。標準 base64 の `+` は
+ * クエリ文字列の解析で【空白に化ける】ため、署名に `+` が入った瞬間に検証が失敗する。
+ * 署名32バイトなら約半数のトークンが該当し、「ときどき繋がらない」という形で出る。
+ */
+function toBase64Url(bytes: Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 async function sign(payload: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -19,7 +29,7 @@ async function sign(payload: string, secret: string): Promise<string> {
     false,
     ['sign'],
   )
-  return toBase64(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(payload))))
+  return toBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(payload))))
 }
 
 export async function issueToken(

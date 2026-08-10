@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { ROOM_TTL_MS, type Blob, type RoomMeta } from './types'
+import { MAX_BLOB_BYTES, ROOM_TTL_MS, type Blob, type RoomMeta } from './types'
 
 export class Room extends DurableObject {
   async fetch(request: Request): Promise<Response> {
@@ -9,6 +9,7 @@ export class Room extends DurableObject {
     if (url.pathname === '/enter') return this.handleEnter(request)
     if (url.pathname === '/blob' && request.method === 'GET') return this.handleGetBlob()
     if (url.pathname === '/blob' && request.method === 'PUT') return this.handlePutBlob(request)
+    if (url.pathname === '/ws') return this.handleWebSocket()
     return new Response('Not Found', { status: 404 })
   }
 
@@ -114,6 +115,55 @@ export class Room extends DurableObject {
     }
     this.put('blob', blob)
     return Response.json({ ok: true })
+  }
+
+  private handleWebSocket(): Response {
+    this.ensureSchema()
+    const blob = this.get<Blob>('blob')
+    if (blob === null) return new Response('not found', { status: 404 })
+
+    const pair = new WebSocketPair()
+    const [client, server] = Object.values(pair)
+    // Hibernation API。server.accept() を使うと DO が常駐し duration 課金が続く
+    this.ctx.acceptWebSocket(server)
+    server.send(JSON.stringify({ type: 'init', blob }))
+    return new Response(null, { status: 101, webSocket: client })
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== 'string') return
+    if (message.length > MAX_BLOB_BYTES * 2) {
+      ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
+      return
+    }
+    let msg: { type?: string; blob?: Blob }
+    try {
+      msg = JSON.parse(message)
+    } catch {
+      return
+    }
+    if (msg.type !== 'update' || typeof msg.blob?.ciphertext !== 'string') return
+    // 判定は HTTP の作成・更新と同じ基準に揃える（設計 §7.4 の唯一の防御）
+    if (msg.blob.ciphertext.length > MAX_BLOB_BYTES) {
+      ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
+      return
+    }
+
+    this.ensureSchema()
+    this.put('blob', msg.blob)
+
+    // 送信者を除外するのはここだけ。クライアント側に重複防止フラグを置いてはならない
+    const payload = JSON.stringify({ type: 'update', blob: msg.blob })
+    for (const peer of this.ctx.getWebSockets()) {
+      if (peer !== ws) peer.send(payload)
+    }
+  }
+
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // 1004 / 1005（コード無し）/ 1006（異常終了）は close() に渡すと例外になる
+    const reusable = code >= 1000 && code < 5000 && code !== 1004 && code !== 1005 && code !== 1006
+    if (reusable) ws.close(code, reason)
+    else ws.close()
   }
 
   async alarm(): Promise<void> {

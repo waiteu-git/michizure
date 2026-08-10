@@ -48,4 +48,25 @@ describe('アクセストークン', () => {
     const t = await issueToken('ROOM0000ROOM0000', 'another-secret', 60_000, NOW)
     expect(await verifyToken(t, 'ROOM0000ROOM0000', SECRET, NOW)).toBe(false)
   })
+
+  // 計画には無いが追加した。ここが崩れると WebSocket が「ときどき 401」になり、
+  // 症状（WS が繋がらない）から原因（署名の符号化）まで距離があって追いにくい。
+  // 標準 base64 だと `+` がクエリ文字列で空白に化ける
+  it('クエリ文字列を往復しても検証できる', async () => {
+    for (let i = 0; i < 200; i++) {
+      const roomId = generateRoomId()
+      const token = await issueToken(roomId, SECRET, 60_000, NOW)
+      const url = new URL(`https://example.com/api/rooms/${roomId}/ws?token=${token}`)
+      const roundTripped = url.searchParams.get('token') ?? ''
+      expect(roundTripped).toBe(token)
+      expect(await verifyToken(roundTripped, roomId, SECRET, NOW)).toBe(true)
+    }
+  })
+
+  it('URLで安全な文字だけで構成される', async () => {
+    for (let i = 0; i < 50; i++) {
+      const t = await issueToken(generateRoomId(), SECRET, 60_000, NOW)
+      expect(t).toMatch(/^[A-Za-z0-9._-]+$/)
+    }
+  })
 })
