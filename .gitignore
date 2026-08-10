@@ -1,5 +1,8 @@
 node_modules/
 .wrangler/
+# `npx wrangler types` の生成物。wrangler.toml の [vars] の値がそのまま埋め込まれるため
+# 追跡しない（`npm run typecheck` が毎回生成し直す）
+worker-configuration.d.ts
 dist/
 .dev.vars
 *.log
