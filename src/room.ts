@@ -166,6 +166,13 @@ export class Room extends DurableObject {
     else ws.close()
   }
 
+  /** テスト専用。ストレージの全内容を文字列で返す。平文が混入していないかの検査に使う */
+  async dumpForTest(): Promise<string> {
+    this.ensureSchema()
+    const rows = [...this.sql().exec('SELECT key, value FROM room')]
+    return JSON.stringify(rows)
+  }
+
   async alarm(): Promise<void> {
     // Task 11 で実装する
   }
