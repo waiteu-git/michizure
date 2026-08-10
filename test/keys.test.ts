@@ -31,6 +31,28 @@ describe('鍵導出', () => {
     expect(salts.size).toBe(50)
   })
 
+  // 🔴 生成した日本語の合言葉を配る設計なので、ここが崩れると
+  // 「正しい合言葉なのに入室できない」が端末差で起きる。症状から原因が見えない
+  it('濁点の表し方が違っても同じ鍵になる（Unicode 正規化）', async () => {
+    const salt = generateSalt()
+    const composed = 'みずうみこばんつばめひので' // 合成済み（NFC）
+    const decomposed = composed.normalize('NFD') // 基底＋結合濁点
+    expect(composed).not.toBe(decomposed) // バイト列としては別物
+    expect([...composed].length).not.toBe([...decomposed].length)
+
+    const a = await deriveKeys(composed, salt, FAST)
+    const b = await deriveKeys(decomposed, salt, FAST)
+    expect(b.authKey).toBe(a.authKey)
+    expect(b64(b.encKeyBits)).toBe(b64(a.encKeyBits))
+  })
+
+  it('半濁点・カタカナでも正規化が効く', async () => {
+    const salt = generateSalt()
+    const a = await deriveKeys('パンプキン', salt, FAST)
+    const b = await deriveKeys('パンプキン'.normalize('NFD'), salt, FAST)
+    expect(b.authKey).toBe(a.authKey)
+  })
+
   it('同じ合言葉とソルトから同じ鍵が出る', async () => {
     const salt = generateSalt()
     const a = await deriveKeys('たびのあいことば', salt, FAST)

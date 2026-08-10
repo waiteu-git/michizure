@@ -24,6 +24,21 @@ export function generateSalt(): string {
 }
 
 /**
+ * 🔴 合言葉は必ず正規化してから鍵に通す。
+ *
+ * 日本語の濁点は2通りの表し方がある（「みずうみ」= 合成済み1文字 / 基底+結合濁点の2文字）。
+ * 見た目は同じでもバイト列が違うため、正規化しないと**端末や入力方法の差で鍵が変わり、
+ * 「正しい合言葉なのに入室できない」**が起きる。しかも症状から原因が全く見えない。
+ *
+ * NFC を選ぶ理由: パスワード類の国際化を扱う PRECIS の OpaqueString プロファイルが
+ * NFC を規定しており、日本語テキストの標準的な保持形とも一致するため。
+ * ⚠ NFKC にすると全角/半角なども統合されるが、統合しすぎる副作用がある（別途検討中）。
+ */
+export function normalizePassphrase(passphrase: string): string {
+  return passphrase.normalize('NFC')
+}
+
+/**
  * 合言葉から authKey（サーバーへ送る）と encKey（送らない）を導出する。
  * 別々の info から HKDF で分岐させるため、authKey が漏れても encKey は導出できない。
  */
@@ -32,9 +47,13 @@ export async function deriveKeys(
   salt: string,
   iterations: number,
 ): Promise<{ authKey: string; encKeyBits: ArrayBuffer }> {
-  const pwKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, [
-    'deriveBits',
-  ])
+  const pwKey = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(normalizePassphrase(passphrase)),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  )
   const masterBits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', salt: fromBase64(salt), iterations, hash: 'SHA-256' },
     pwKey,
