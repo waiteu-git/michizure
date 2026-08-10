@@ -8,6 +8,24 @@ function b64(buf: ArrayBuffer): string {
 }
 
 describe('鍵導出', () => {
+  /**
+   * 🔴 既知答えテスト。値を固定するのが目的で、内容に意味は無い。
+   *
+   * 鍵は「合言葉 + salt + 反復回数 + アルゴリズム（PBKDF2→HKDF の info 文字列を含む）」
+   * から決まる。このどれか1つでも変わると、**それ以前に作られた部屋は入室も復号も
+   * できなくなる**。反復回数は部屋ごとに保存して回避したが、info 文字列や
+   * ハッシュ関数の変更は保存では回避できない＝ここで固定するしかない。
+   *
+   * ⚠ この値が変わったら、それは「テストを直す」場面ではなく
+   * 「既存の全部屋を壊す変更をしようとしている」場面である。
+   */
+  it('既知の入力から既知の鍵が出る（アルゴリズムを固定する）', async () => {
+    const salt = 'AAAAAAAAAAAAAAAAAAAAAA=='
+    const { authKey, encKeyBits } = await deriveKeys('みちづれ', salt, 1000)
+    expect(authKey).toBe('Eeinq3ssxvXetR9N0ByafyIJ9t+CASWxWcZU0Ql/Gzo=')
+    expect(b64(encKeyBits)).toBe('jTAziAvFLsC89iAt8R9bU75t73c5L1g80qOwgyaUAQQ=')
+  })
+
   it('ソルトは毎回異なる', () => {
     const salts = new Set(Array.from({ length: 50 }, () => generateSalt()))
     expect(salts.size).toBe(50)
