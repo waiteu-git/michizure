@@ -4,6 +4,9 @@
     "lib": ["es2022"],
     "module": "es2022",
     "moduleResolution": "bundler",
+    // src の相互 import に .ts を付ける。付けないと Node から直接読めず、
+    // scripts/e2e-local.mjs（実 HTTP 越しの通し確認）が動かない
+    "allowImportingTsExtensions": true,
     "types": ["@cloudflare/vitest-pool-workers/types"],
     "strict": true,
     "noEmit": true,

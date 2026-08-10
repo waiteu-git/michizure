@@ -1,4 +1,4 @@
-import { toBase64, fromBase64 } from './keys'
+import { toBase64, fromBase64 } from './keys.ts'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()

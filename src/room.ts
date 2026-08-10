@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { MAX_BLOB_BYTES, ROOM_TTL_MS, type Blob, type RoomMeta } from './types'
+import { MAX_BLOB_BYTES, ROOM_TTL_MS, type Blob, type RoomMeta } from './types.ts'
 
 export class Room extends DurableObject {
   async fetch(request: Request): Promise<Response> {

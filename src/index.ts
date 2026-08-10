@@ -1,8 +1,8 @@
-import { generateRoomId, issueToken, verifyToken } from './token'
-import { toBase64 } from './keys'
-import { MAX_BLOB_BYTES, TOKEN_TTL_MS, type Blob } from './types'
+import { generateRoomId, issueToken, verifyToken } from './token.ts'
+import { toBase64 } from './keys.ts'
+import { MAX_BLOB_BYTES, TOKEN_TTL_MS, type Blob } from './types.ts'
 
-export { Room } from './room'
+export { Room } from './room.ts'
 
 export interface Env {
   ROOM: DurableObjectNamespace

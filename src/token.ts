@@ -1,4 +1,4 @@
-import { toBase64 } from './keys'
+import { toBase64 } from './keys.ts'
 
 const enc = new TextEncoder()
 // Crockford base32 から I / L / O / U を除いた文字集合。読み間違いを避ける
