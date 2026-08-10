@@ -90,6 +90,31 @@
       （一番遅い端末が体験を決めます）。
     </p>
 
+    <h2 style="font-size: 1.05rem">その反復回数で、合言葉はどこまで守れるか</h2>
+
+    <p class="note">
+      サーバーのデータが漏れた場合に、攻撃者が手元で合言葉を総当たりする時間の目安です。
+      <strong>⚠ 攻撃者のGPUがこの端末の1コアの1,000〜3,000倍という「仮定」に基づく計算</strong>で、
+      測定値ではありません。桁の感覚をつかむために使ってください。
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>合言葉の作り方</th>
+          <th>強度</th>
+          <th>割られるまで</th>
+        </tr>
+      </thead>
+      <tbody id="crack"></tbody>
+    </table>
+
+    <p class="note">
+      <strong>反復回数を2倍にして得られるのは 1 bit、単語を1つ足すと約 12 bit。</strong>
+      反復回数をいくら上げても「よくある単語1つ」は守れません。詳細は
+      <code>docs/passphrase-strength.md</code>。
+    </p>
+
     <p id="env"></p>
 
     <script>
@@ -141,10 +166,45 @@
           }
           const median = [...times].sort((a, b) => a - b)[1]
           tr.children[4].innerHTML = `<strong>${Math.round(median)}ms</strong>`
+          if (iterations === 600000) showCrackTimes(median)
         }
         button.disabled = false
         button.textContent = 'もう一度測る'
       })
+
+      // 攻撃者のGPUがこの端末の1コアの何倍かは【仮定】。測定していない
+      const GPU_FACTORS = [1000, 3000]
+      const SPACES = [
+        ['4桁の数字', 1e4],
+        ['よくある単語1つ', 1e5],
+        ['ランダムな単語2つ（5000語）', 5000 ** 2],
+        ['ランダムな単語3つ（5000語）', 5000 ** 3],
+        ['ランダムな単語4つ（5000語）', 5000 ** 4],
+      ]
+
+      function human(sec) {
+        if (sec < 60) return sec.toFixed(1) + '秒'
+        if (sec < 3600) return Math.round(sec / 60) + '分'
+        if (sec < 86400) return Math.round(sec / 3600) + '時間'
+        if (sec < 86400 * 365) return Math.round(sec / 86400) + '日'
+        const y = sec / 86400 / 365
+        return y > 1e6 ? (y / 1e6).toPrecision(2) + '百万年' : Math.round(y) + '年'
+      }
+
+      function showCrackTimes(medianMs) {
+        const perGuessSec = medianMs / 1000
+        const rows = document.getElementById('crack')
+        rows.innerHTML = ''
+        for (const [label, space] of SPACES) {
+          const fast = space / 2 / (GPU_FACTORS[1] / perGuessSec)
+          const slow = space / 2 / (GPU_FACTORS[0] / perGuessSec)
+          const tr = document.createElement('tr')
+          tr.innerHTML =
+            `<td>${label}</td><td>${Math.round(Math.log2(space))} bit</td>` +
+            `<td>${human(fast)} 〜 ${human(slow)}</td>`
+          rows.appendChild(tr)
+        }
+      }
     </script>
   </body>
 </html>

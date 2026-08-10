@@ -56,6 +56,34 @@
 - zone 側の収集そのものを避ける案だが、Workers を独自ドメインで出す以上は zone に載る。**現実的な回避策は見つかっていない**
 - 実質、案A か案B の選択になる
 
+## 残1件: invocation log に IP が実際に載るかの確認（推測でなく実機で）
+
+これが取れると、法務照会 Q3 を「たぶん」でなく断定形にできる。**Cloudflare の認証が要るのでユーザーの手。**
+
+⚠ 現在の実装は `[observability] enabled = false` なのでログは出ない。**確認のときだけ一時的に有効化する**。
+
+```bash
+cd ~/dev/michizure
+# 1. 一時的にログを有効化（この編集はコミットしない）
+#    wrangler.toml の [observability] を enabled = true にする
+# 2. Cloudflare のエッジで動かす（デプロイせずに実行できる）
+npx wrangler dev --remote
+```
+
+別のターミナルで、tail の生データを見る:
+
+```bash
+npx wrangler tail --format=json
+```
+
+そのうえで `curl` でリクエストを1本投げ、tail に流れる JSON の中に
+`cf-connecting-ip` / `x-forwarded-for` / IPアドレスそのもの が現れるかを見る。
+
+- **現れた場合**: 「Workers Logs を有効にすると IP が保存される（無料3日）。当サービスは無効化している」と断定形で書ける
+- **現れなかった場合**: 「有効化しても IP は載らないことを実機で確認した」と書ける
+- ⚠ **確認が終わったら `enabled = false` に戻す**（戻し忘れは `npm test` の pretest が検知する）
+- ⚠ `wrangler tail` が見せるのは trace event であって Workers Logs の保存内容そのものではない。**同じトレース基盤だが完全な同一性は保証されない**ので、結論にはその但し書きを付ける
+
 ## ユーザーがやる必要のあること（Cloudflare の認証が要る＝エージェントは実行しない）
 
 1. **Web Analytics の有効/無効をダッシュボードで確認する**（既定オンの可能性が高い）。無効にするなら公開前に
