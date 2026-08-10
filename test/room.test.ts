@@ -2,6 +2,7 @@ import { SELF } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
+import { MAX_CIPHERTEXT_BYTES, ciphertextBytes } from '../src/types'
 
 const FAST = 1000
 
@@ -45,8 +46,17 @@ describe('部屋の作成', () => {
   })
 
   it('大きすぎる暗号文を拒否する', async () => {
-    const blob = { ciphertext: 'A'.repeat(300 * 1024), iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
+    // 500KiB 分の base64 文字 ≒ 375KiB のバイト列 ⇒ 上限 256KiB を超える
+    const blob = { ciphertext: 'A'.repeat(500 * 1024), iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
     expect((await createRoom({ blob })).status).toBe(413)
+  })
+
+  // ciphertext だけを見ていると、他のフィールドが素通りする。
+  // iv は 12 バイトの base64（16文字）でしかありえない
+  it('巨大な iv を拒否する', async () => {
+    const blob = { ciphertext: 'Zm9v', iv: 'A'.repeat(2 * 1024 * 1024), blobVersion: 1 }
+    const res = await createRoom({ blob })
+    expect([400, 413]).toContain(res.status)
   })
 })
 
@@ -107,6 +117,11 @@ describe('入室', () => {
   })
 })
 
+/** 復号後およそ n バイトになる（パディング無しの）base64 文字列。4文字=3バイト */
+function base64OfBytes(n: number): string {
+  return 'A'.repeat(Math.floor(n / 3) * 4)
+}
+
 async function getBlob(roomId: string, token: string) {
   return SELF.fetch(`https://example.com/api/rooms/${roomId}/blob`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -164,25 +179,52 @@ describe('暗号文', () => {
 
   it('大きすぎる暗号文を拒否する', async () => {
     const room = await createAndGet()
-    const big = { ciphertext: 'A'.repeat(300 * 1024), iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
+    const big = { ciphertext: 'A'.repeat(500 * 1024), iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
     expect((await putBlob(room.roomId, room.token, big)).status).toBe(413)
   })
 
-  // 計画には無いが追加した。計画のままだと更新側の閾値だけが MAX_BLOB_BYTES*2 で、
-  // 「作成では 413 なのに更新では通る」穴ができる。境界を作成と揃えたことを固定する
-  it('作成で拒否されるサイズは更新でも拒否される', async () => {
+  // 計画には無いが追加した。計画のままだと更新側の閾値だけが本文長で、
+  // 「作成では 413 なのに更新では通る」穴ができる。境界を作成と揃えたことを固定する。
+  //
+  // 🔴 単位も一緒に固定している。ciphertext は base64 の【文字列】なので、
+  // その文字数を 256KiB と比べると実際の上限が 3/4（192KiB）に縮み、
+  // spec §7.4 の「暗号文のバイト数上限 256KB」と静かにズレる。
+  it('作成と更新で境界が一致し、上限は復号後のバイト数で測られる', async () => {
     const room = await createAndGet()
-    const justOver = {
-      ciphertext: 'A'.repeat(256 * 1024 + 1),
+    const atLimit = base64OfBytes(MAX_CIPHERTEXT_BYTES)
+    const overLimit = base64OfBytes(MAX_CIPHERTEXT_BYTES + 3)
+    expect(ciphertextBytes(atLimit)).toBeLessThanOrEqual(MAX_CIPHERTEXT_BYTES)
+    expect(ciphertextBytes(overLimit)).toBeGreaterThan(MAX_CIPHERTEXT_BYTES)
+
+    const over = { ciphertext: overLimit, iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
+    const at = { ciphertext: atLimit, iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
+
+    expect((await putBlob(room.roomId, room.token, over)).status).toBe(413)
+    expect((await createRoom({ blob: over })).status).toBe(413)
+    // 上限ちょうどは通る（境界の向きを固定する）
+    expect((await putBlob(room.roomId, room.token, at)).status).toBe(200)
+    expect((await createRoom({ blob: at })).status).toBe(200)
+
+    // 文字数で切っていたら弾かれていたサイズ（192KiB超〜256KiB以下）が通ることを固定する
+    const between = { ciphertext: 'A'.repeat(300 * 1024), iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 }
+    expect(ciphertextBytes(between.ciphertext)).toBeGreaterThan(196_608)
+    expect(ciphertextBytes(between.ciphertext)).toBeLessThan(MAX_CIPHERTEXT_BYTES)
+    expect((await putBlob(room.roomId, room.token, between)).status).toBe(200)
+  })
+
+  // 上限を緩めた（192KiB→256KiB）ので、ストレージが本当にその大きさを
+  // 受けて読み戻せるかを推測せずに確かめる
+  it('上限ちょうどの暗号文を保存して読み戻せる', async () => {
+    const room = await createAndGet()
+    const atLimit = base64OfBytes(MAX_CIPHERTEXT_BYTES)
+    expect((await putBlob(room.roomId, room.token, {
+      ciphertext: atLimit,
       iv: 'AAAAAAAAAAAAAAAA',
       blobVersion: 1,
-    }
-    const justUnder = { ...justOver, ciphertext: 'A'.repeat(256 * 1024) }
+    })).status).toBe(200)
 
-    expect((await putBlob(room.roomId, room.token, justOver)).status).toBe(413)
-    expect((await createRoom({ blob: justOver })).status).toBe(413)
-    // 上限ちょうどは通る（境界の向きを固定する）
-    expect((await putBlob(room.roomId, room.token, justUnder)).status).toBe(200)
-    expect((await createRoom({ blob: justUnder })).status).toBe(200)
+    const got = (await (await getBlob(room.roomId, room.token)).json()) as { ciphertext: string }
+    expect(got.ciphertext).toHaveLength(atLimit.length)
+    expect(got.ciphertext).toBe(atLimit)
   })
 })

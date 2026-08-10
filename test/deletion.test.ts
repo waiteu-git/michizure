@@ -58,6 +58,52 @@ describe('部屋の削除', () => {
   })
 })
 
+describe('削除の抜け道', () => {
+  // 削除したのにデータが戻るのは、privacy 上いちばん悪い壊れ方
+  it('削除後に、生きている WebSocket から書き戻せない', async () => {
+    const room = await createRoom()
+    const res = await SELF.fetch(
+      `https://example.com/api/rooms/${room.roomId}/ws?token=${room.token}`,
+      { headers: { Upgrade: 'websocket' } },
+    )
+    const ws = res.webSocket!
+    ws.accept()
+    await new Promise((r) => setTimeout(r, 100))
+
+    expect((await del(room.roomId, room.authKey)).status).toBe(200)
+
+    // 削除を知らない（あるいは知っていて悪意のある）クライアントが更新を送る。
+    // サーバーが接続を閉じていれば send 自体が例外になる。どちらでも
+    // 確かめたい不変条件は同じ＝【部屋が復活しないこと】
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'update',
+          blob: { ciphertext: 'Zm9v', iv: 'AAAAAAAAAAAAAAAA', blobVersion: 1 },
+        }),
+      )
+    } catch {
+      // 接続が閉じられている＝期待どおり
+    }
+    await new Promise((r) => setTimeout(r, 200))
+
+    expect(await blobStatus(room.roomId, room.token)).toBe(404)
+    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
+    expect(JSON.parse(dump)).toEqual([])
+  })
+
+  // enter だけをバックオフしても、同じ authKey を試せる経路が他にあれば意味がない
+  it('DELETE の連続失敗にもバックオフが効く', async () => {
+    const room = await createRoom('けす')
+    const wrong = (await deriveKeys('ちがう', room.salt, FAST)).authKey
+    for (let i = 0; i < 5; i++) await del(room.roomId, wrong)
+    expect((await del(room.roomId, room.authKey)).status).toBe(429)
+    // ブロック中に削除が実行されてしまっていないこと
+    expect(await blobStatus(room.roomId, room.token)).toBe(200)
+  })
+})
+
 describe('自動削除', () => {
   it('1年経過していれば alarm でデータが消える', async () => {
     const room = await createRoom()

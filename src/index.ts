@@ -1,6 +1,13 @@
 import { generateRoomId, issueToken, verifyToken } from './token.ts'
 import { toBase64 } from './keys.ts'
-import { MAX_BLOB_BYTES, TOKEN_TTL_MS, type Blob } from './types.ts'
+import {
+  MAX_CIPHERTEXT_BYTES,
+  MAX_REQUEST_BYTES,
+  TOKEN_TTL_MS,
+  blobShapeInvalid,
+  ciphertextBytes,
+  type Blob,
+} from './types.ts'
 
 export { Room } from './room.ts'
 
@@ -21,19 +28,26 @@ export async function hashAuthKey(authKey: string): Promise<string> {
 
 export function blobTooLarge(blob: Blob | undefined): boolean {
   if (!blob || typeof blob.ciphertext !== 'string') return false
-  return blob.ciphertext.length > MAX_BLOB_BYTES
+  // 文字数ではなく復号後のバイト数で見る（設計 §7.4 の 256KB はバイト数）
+  return ciphertextBytes(blob.ciphertext) > MAX_CIPHERTEXT_BYTES
 }
 
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
+  // 生の本文での足切りを更新側だけに置くと、作成経路から巨大な本文が入る
+  const raw = await request.text()
+  if (raw.length > MAX_REQUEST_BYTES) {
+    return Response.json({ error: 'blob_too_large' }, { status: 413 })
+  }
   let body: { salt?: string; authKey?: string; blob?: Blob }
   try {
-    body = (await request.json()) as typeof body
+    body = JSON.parse(raw) as typeof body
   } catch {
     return Response.json({ error: 'invalid_json' }, { status: 400 })
   }
   if (!body.salt) return Response.json({ error: 'salt_required' }, { status: 400 })
   if (!body.authKey) return Response.json({ error: 'auth_key_required' }, { status: 400 })
   if (!body.blob?.ciphertext) return Response.json({ error: 'blob_required' }, { status: 400 })
+  if (blobShapeInvalid(body.blob)) return Response.json({ error: 'invalid_blob' }, { status: 400 })
   if (blobTooLarge(body.blob)) return Response.json({ error: 'blob_too_large' }, { status: 413 })
 
   const roomId = generateRoomId()
@@ -97,7 +111,7 @@ async function handleBlob(request: Request, env: Env, roomId: string): Promise<R
   if (request.method === 'PUT') {
     body = await request.text()
     // 生の本文での足切り。巨大な本文を JSON.parse しないための安い防御
-    if (body.length > MAX_BLOB_BYTES * 2) {
+    if (body.length > MAX_REQUEST_BYTES) {
       return Response.json({ error: 'blob_too_large' }, { status: 413 })
     }
     let parsed: Blob | undefined
@@ -106,8 +120,11 @@ async function handleBlob(request: Request, env: Env, roomId: string): Promise<R
     } catch {
       return Response.json({ error: 'invalid_json' }, { status: 400 })
     }
-    // 判定は作成時（handleCreateRoom）と同じ blobTooLarge で行う。
-    // ここだけ別の基準にすると「作成では 413 なのに更新では通る」穴ができる
+    // 判定は作成時（handleCreateRoom）と同じ関数で行う。
+    // ここだけ別の基準にすると「作成では弾かれるのに更新では通る」穴ができる
+    if (blobShapeInvalid(parsed)) {
+      return Response.json({ error: 'invalid_blob' }, { status: 400 })
+    }
     if (blobTooLarge(parsed)) {
       return Response.json({ error: 'blob_too_large' }, { status: 413 })
     }
@@ -129,7 +146,7 @@ async function handleDeleteRoom(request: Request, env: Env, roomId: string): Pro
   if (!body.authKey) return Response.json({ error: 'auth_key_required' }, { status: 400 })
   const res = await roomStub(env, roomId).fetch('https://do/delete', {
     method: 'POST',
-    body: JSON.stringify({ authKeyHash: await hashAuthKey(body.authKey) }),
+    body: JSON.stringify({ authKeyHash: await hashAuthKey(body.authKey), now: Date.now() }),
   })
   return new Response(res.body, {
     status: res.status,

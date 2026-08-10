@@ -1,5 +1,12 @@
 import { DurableObject } from 'cloudflare:workers'
-import { MAX_BLOB_BYTES, ROOM_TTL_MS, type Blob, type RoomMeta } from './types.ts'
+import {
+  MAX_CIPHERTEXT_BYTES,
+  MAX_REQUEST_BYTES,
+  ROOM_TTL_MS,
+  ciphertextBytes,
+  type Blob,
+  type RoomMeta,
+} from './types.ts'
 
 export class Room extends DurableObject {
   async fetch(request: Request): Promise<Response> {
@@ -67,30 +74,47 @@ export class Room extends DurableObject {
     return Response.json({ salt: auth.salt })
   }
 
-  private async handleEnter(request: Request): Promise<Response> {
-    this.ensureSchema()
-    const auth = this.get<{ salt: string; authKeyHash: string }>('auth')
-    if (auth === null) return Response.json({ error: 'not_found' }, { status: 404 })
+  /**
+   * authKey を照合する経路すべてで共有する。
+   * ⚠ 入室だけをバックオフしても、同じ authKey を試せる経路（削除など）が
+   * 素通りなら総当たり対策として意味がない。新しい経路を足す時は必ずここを通す。
+   */
+  private checkAuth(
+    candidateHash: string,
+    now: number,
+  ): { ok: true } | { ok: false; status: 429 | 401 | 404 } {
+    const auth = this.get<{ authKeyHash: string }>('auth')
+    if (auth === null) return { ok: false, status: 404 }
 
-    const body = (await request.json()) as { authKeyHash: string; now: number }
     const gate = this.get<{ failures: number; blockedUntil: number }>('gate') ?? {
       failures: 0,
       blockedUntil: 0,
     }
-    if (body.now < gate.blockedUntil) {
-      return Response.json({ error: 'too_many_attempts' }, { status: 429 })
-    }
+    if (now < gate.blockedUntil) return { ok: false, status: 429 }
 
-    if (!constantTimeEquals(body.authKeyHash, auth.authKeyHash)) {
+    if (!constantTimeEquals(candidateHash, auth.authKeyHash)) {
       const failures = gate.failures + 1
       // 5回目以降は指数バックオフ（5回目=1分、6回目=2分…最大1時間）
       const blockedUntil =
-        failures >= 5 ? body.now + Math.min(60_000 * 2 ** (failures - 5), 3_600_000) : 0
+        failures >= 5 ? now + Math.min(60_000 * 2 ** (failures - 5), 3_600_000) : 0
       this.put('gate', { failures, blockedUntil })
-      return Response.json({ error: 'invalid_key' }, { status: 401 })
+      return { ok: false, status: 401 }
     }
 
     this.put('gate', { failures: 0, blockedUntil: 0 })
+    return { ok: true }
+  }
+
+  private async handleEnter(request: Request): Promise<Response> {
+    this.ensureSchema()
+    const body = (await request.json()) as { authKeyHash: string; now: number }
+    const result = this.checkAuth(body.authKeyHash, body.now)
+    if (!result.ok) {
+      const code =
+        result.status === 404 ? 'not_found' : result.status === 429 ? 'too_many_attempts' : 'invalid_key'
+      return Response.json({ error: code }, { status: result.status })
+    }
+
     const meta = this.get<RoomMeta>('meta')!
     this.put('meta', { ...meta, lastAccessAt: body.now })
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
@@ -133,7 +157,7 @@ export class Room extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return
-    if (message.length > MAX_BLOB_BYTES * 2) {
+    if (message.length > MAX_REQUEST_BYTES) {
       ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
       return
     }
@@ -145,12 +169,18 @@ export class Room extends DurableObject {
     }
     if (msg.type !== 'update' || typeof msg.blob?.ciphertext !== 'string') return
     // 判定は HTTP の作成・更新と同じ基準に揃える（設計 §7.4 の唯一の防御）
-    if (msg.blob.ciphertext.length > MAX_BLOB_BYTES) {
+    if (ciphertextBytes(msg.blob.ciphertext) > MAX_CIPHERTEXT_BYTES) {
       ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
       return
     }
 
     this.ensureSchema()
+    // 削除済みの部屋へ書き戻さない。接続が生きていても部屋はもう無い
+    if (this.get<RoomMeta>('meta') === null) {
+      ws.send(JSON.stringify({ type: 'error', code: 'room_deleted' }))
+      ws.close(1000, 'room deleted')
+      return
+    }
     this.put('blob', msg.blob)
 
     // 送信者を除外するのはここだけ。クライアント側に重複防止フラグを置いてはならない
@@ -176,11 +206,13 @@ export class Room extends DurableObject {
 
   private async handleDelete(request: Request): Promise<Response> {
     this.ensureSchema()
-    const auth = this.get<{ authKeyHash: string }>('auth')
-    if (auth === null) return Response.json({ error: 'not_found' }, { status: 404 })
-    const body = (await request.json()) as { authKeyHash: string }
-    if (!constantTimeEquals(body.authKeyHash, auth.authKeyHash)) {
-      return Response.json({ error: 'invalid_key' }, { status: 401 })
+    const body = (await request.json()) as { authKeyHash: string; now: number }
+    // 入室と同じ関門を通す（ここを素通りさせると入室側のバックオフが無意味になる）
+    const result = this.checkAuth(body.authKeyHash, body.now)
+    if (!result.ok) {
+      const code =
+        result.status === 404 ? 'not_found' : result.status === 429 ? 'too_many_attempts' : 'invalid_key'
+      return Response.json({ error: code }, { status: result.status })
     }
     await this.destroy()
     return Response.json({ ok: true })
@@ -189,6 +221,12 @@ export class Room extends DurableObject {
   private async destroy(): Promise<void> {
     await this.ctx.storage.deleteAlarm()
     await this.ctx.storage.deleteAll()
+    // 🔴 生きている接続を残すと、そこから update が届いて部屋が復活する。
+    // 「削除したのに戻る」は privacy 上いちばん悪い壊れ方なので必ず閉じる
+    for (const ws of this.ctx.getWebSockets()) {
+      ws.send(JSON.stringify({ type: 'error', code: 'room_deleted' }))
+      ws.close(1000, 'room deleted')
+    }
   }
 
   async alarm(): Promise<void> {
