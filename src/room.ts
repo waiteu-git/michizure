@@ -1,8 +1,10 @@
 import { DurableObject } from 'cloudflare:workers'
 import {
+  GATE_DECAY_MS,
   MAX_CIPHERTEXT_BYTES,
   MAX_REQUEST_BYTES,
   ROOM_TTL_MS,
+  blobShapeInvalid,
   ciphertextBytes,
   type Blob,
   type RoomMeta,
@@ -25,11 +27,24 @@ export class Room extends DurableObject {
     return this.ctx.storage.sql
   }
 
+  /**
+   * 🔴 テーブルを作るのは【書き込み時だけ】。
+   * 読み取りで CREATE TABLE すると、存在しない部屋IDを叩かれただけで
+   * DO のストレージが作られ、alarm も無いので永久に残る＝空部屋を無限に量産できる。
+   */
   private ensureSchema(): void {
     this.sql().exec('CREATE TABLE IF NOT EXISTS room (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
   }
 
+  private tableExists(): boolean {
+    const rows = [
+      ...this.sql().exec("SELECT name FROM sqlite_master WHERE type='table' AND name='room'"),
+    ]
+    return rows.length > 0
+  }
+
   private put(key: string, value: unknown): void {
+    this.ensureSchema()
     this.sql().exec(
       'INSERT INTO room (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
       key,
@@ -38,12 +53,12 @@ export class Room extends DurableObject {
   }
 
   private get<T>(key: string): T | null {
+    if (!this.tableExists()) return null
     const rows = [...this.sql().exec('SELECT value FROM room WHERE key = ?', key)]
     return rows.length === 0 ? null : (JSON.parse(rows[0].value as string) as T)
   }
 
   private async handleCreate(request: Request): Promise<Response> {
-    this.ensureSchema()
     if (this.get<RoomMeta>('meta') !== null) {
       return Response.json({ error: 'already_exists' }, { status: 409 })
     }
@@ -51,6 +66,7 @@ export class Room extends DurableObject {
       roomId: string
       salt: string
       authKeyHash: string
+      iterations: number
       blob: Blob
       now: number
     }
@@ -60,18 +76,24 @@ export class Room extends DurableObject {
       lastAccessAt: body.now,
       schemaVersion: 1,
     } satisfies RoomMeta)
-    this.put('auth', { salt: body.salt, authKeyHash: body.authKeyHash })
+    // 🔴 iterations は部屋ごとに残す。既定値を後から変えると、
+    // 残していない部屋は入室も復号もできなくなる（設計 §16 は変える前提）
+    this.put('auth', {
+      salt: body.salt,
+      authKeyHash: body.authKeyHash,
+      iterations: body.iterations,
+    })
     this.put('blob', body.blob)
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
     return Response.json({ ok: true })
   }
 
   private handleSalt(): Response {
-    this.ensureSchema()
-    const auth = this.get<{ salt: string }>('auth')
+    const auth = this.get<{ salt: string; iterations: number }>('auth')
     if (auth === null) return Response.json({ error: 'not_found' }, { status: 404 })
-    // ソルトは秘密ではない。認証前に渡さないとクライアントが鍵を導出できない
-    return Response.json({ salt: auth.salt })
+    // ソルトは秘密ではない。認証前に渡さないとクライアントが鍵を導出できない。
+    // iterations も同じ理由で返す（その部屋が作られた時の値でしか鍵は再現しない）
+    return Response.json({ salt: auth.salt, iterations: auth.iterations })
   }
 
   /**
@@ -86,10 +108,16 @@ export class Room extends DurableObject {
     const auth = this.get<{ authKeyHash: string }>('auth')
     if (auth === null) return { ok: false, status: 404 }
 
-    const gate = this.get<{ failures: number; blockedUntil: number }>('gate') ?? {
-      failures: 0,
-      blockedUntil: 0,
-    }
+    const stored = this.get<{ failures: number; blockedUntil: number; lastFailureAt: number }>(
+      'gate',
+    ) ?? { failures: 0, blockedUntil: 0, lastFailureAt: 0 }
+    // 失敗は時間で減衰させる。減衰が無いと「先月5回打ち間違えた」が永久に効き、
+    // 次の1回でいきなり長時間ロックされる
+    const gate =
+      now - stored.lastFailureAt > GATE_DECAY_MS
+        ? { failures: 0, blockedUntil: 0, lastFailureAt: 0 }
+        : stored
+
     if (now < gate.blockedUntil) return { ok: false, status: 429 }
 
     if (!constantTimeEquals(candidateHash, auth.authKeyHash)) {
@@ -97,16 +125,24 @@ export class Room extends DurableObject {
       // 5回目以降は指数バックオフ（5回目=1分、6回目=2分…最大1時間）
       const blockedUntil =
         failures >= 5 ? now + Math.min(60_000 * 2 ** (failures - 5), 3_600_000) : 0
-      this.put('gate', { failures, blockedUntil })
+      this.put('gate', { failures, blockedUntil, lastFailureAt: now })
       return { ok: false, status: 401 }
     }
 
-    this.put('gate', { failures: 0, blockedUntil: 0 })
+    this.put('gate', { failures: 0, blockedUntil: 0, lastFailureAt: 0 })
     return { ok: true }
   }
 
+  /** テスト専用。関門の状態を任意に書き換える */
+  async setGateForTest(gate: {
+    failures: number
+    blockedUntil: number
+    lastFailureAt: number
+  }): Promise<void> {
+    this.put('gate', gate)
+  }
+
   private async handleEnter(request: Request): Promise<Response> {
-    this.ensureSchema()
     const body = (await request.json()) as { authKeyHash: string; now: number }
     const result = this.checkAuth(body.authKeyHash, body.now)
     if (!result.ok) {
@@ -122,20 +158,18 @@ export class Room extends DurableObject {
   }
 
   private handleGetBlob(): Response {
-    this.ensureSchema()
     const blob = this.get<Blob>('blob')
     if (blob === null) return Response.json({ error: 'not_found' }, { status: 404 })
     return Response.json(blob)
   }
 
   private async handlePutBlob(request: Request): Promise<Response> {
-    this.ensureSchema()
     if (this.get<Blob>('blob') === null) {
       return Response.json({ error: 'not_found' }, { status: 404 })
     }
-    // 中身は読まない。読めない。サイズだけ見る
+    // 中身は読まない。読めない。形とサイズだけ見る
     const blob = (await request.json()) as Blob
-    if (typeof blob?.ciphertext !== 'string' || typeof blob?.iv !== 'string') {
+    if (blobShapeInvalid(blob)) {
       return Response.json({ error: 'invalid_blob' }, { status: 400 })
     }
     this.put('blob', blob)
@@ -143,7 +177,6 @@ export class Room extends DurableObject {
   }
 
   private handleWebSocket(): Response {
-    this.ensureSchema()
     const blob = this.get<Blob>('blob')
     if (blob === null) return new Response('not found', { status: 404 })
 
@@ -167,14 +200,18 @@ export class Room extends DurableObject {
     } catch {
       return
     }
-    if (msg.type !== 'update' || typeof msg.blob?.ciphertext !== 'string') return
-    // 判定は HTTP の作成・更新と同じ基準に揃える（設計 §7.4 の唯一の防御）
-    if (ciphertextBytes(msg.blob.ciphertext) > MAX_CIPHERTEXT_BYTES) {
+    // 🔴 書き込み経路は create / PUT / WS の3つ。判定は必ず同じ関数を通す。
+    // ここだけ ciphertext の型しか見ていなかったため、iv の無い update 1通で
+    // 部屋の唯一の暗号文と iv が同時に消えていた（サーバーに復旧手段は無い）
+    if (msg.type !== 'update' || blobShapeInvalid(msg.blob)) {
+      ws.send(JSON.stringify({ type: 'error', code: 'invalid_blob' }))
+      return
+    }
+    if (ciphertextBytes(msg.blob!.ciphertext) > MAX_CIPHERTEXT_BYTES) {
       ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
       return
     }
 
-    this.ensureSchema()
     // 削除済みの部屋へ書き戻さない。接続が生きていても部屋はもう無い
     if (this.get<RoomMeta>('meta') === null) {
       ws.send(JSON.stringify({ type: 'error', code: 'room_deleted' }))
@@ -197,15 +234,26 @@ export class Room extends DurableObject {
     else ws.close()
   }
 
-  /** テスト専用。ストレージの全内容を文字列で返す。平文が混入していないかの検査に使う */
+  /**
+   * テスト専用。ストレージの全内容を返す。平文が混入していないかの検査に使う。
+   * ⚠ 自作テーブルだけを見ると、別のテーブルに漏れたデータを見逃す。
+   * ⚠ ここで CREATE TABLE してはいけない（検査そのものがストレージを作ってしまう）
+   */
   async dumpForTest(): Promise<string> {
-    this.ensureSchema()
-    const rows = [...this.sql().exec('SELECT key, value FROM room')]
-    return JSON.stringify(rows)
+    // `_cf_*` は Durable Objects の内部テーブルで、読もうとすると SQLITE_AUTH で拒否される
+    const tables = [
+      ...this.sql().exec(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'",
+      ),
+    ].map((r) => r.name as string)
+    const out: Record<string, unknown[]> = {}
+    for (const table of tables) {
+      out[table] = [...this.sql().exec(`SELECT * FROM ${table}`)]
+    }
+    return JSON.stringify(out)
   }
 
   private async handleDelete(request: Request): Promise<Response> {
-    this.ensureSchema()
     const body = (await request.json()) as { authKeyHash: string; now: number }
     // 入室と同じ関門を通す（ここを素通りさせると入室側のバックオフが無意味になる）
     const result = this.checkAuth(body.authKeyHash, body.now)
@@ -230,7 +278,6 @@ export class Room extends DurableObject {
   }
 
   async alarm(): Promise<void> {
-    this.ensureSchema()
     const meta = this.get<RoomMeta>('meta')
     if (meta === null) return
     if (Date.now() - meta.lastAccessAt >= ROOM_TTL_MS) {
@@ -243,7 +290,6 @@ export class Room extends DurableObject {
 
   /** テスト専用。lastAccessAt を任意の時刻に書き換える */
   async setLastAccessForTest(at: number): Promise<void> {
-    this.ensureSchema()
     const meta = this.get<RoomMeta>('meta')
     if (meta === null) return
     this.put('meta', { ...meta, lastAccessAt: at })

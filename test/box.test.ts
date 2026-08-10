@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal, open } from '../src/box'
 
-const FAST = 1000
+const FAST = 1000 // サーバーを介さないので低い値でよい
 
 async function key(passphrase = 'ことば') {
   return (await deriveKeys(passphrase, generateSalt(), FAST)).encKeyBits

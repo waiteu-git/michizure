@@ -6,6 +6,7 @@ import {
   TOKEN_TTL_MS,
   blobShapeInvalid,
   ciphertextBytes,
+  iterationsInvalid,
   type Blob,
 } from './types.ts'
 
@@ -27,7 +28,8 @@ export async function hashAuthKey(authKey: string): Promise<string> {
 }
 
 export function blobTooLarge(blob: Blob | undefined): boolean {
-  if (!blob || typeof blob.ciphertext !== 'string') return false
+  // ⚠ 判定できない入力は「大きすぎる」側に倒す。false を返すと上限検査が素通りする
+  if (!blob || typeof blob.ciphertext !== 'string') return true
   // 文字数ではなく復号後のバイト数で見る（設計 §7.4 の 256KB はバイト数）
   return ciphertextBytes(blob.ciphertext) > MAX_CIPHERTEXT_BYTES
 }
@@ -38,7 +40,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   if (raw.length > MAX_REQUEST_BYTES) {
     return Response.json({ error: 'blob_too_large' }, { status: 413 })
   }
-  let body: { salt?: string; authKey?: string; blob?: Blob }
+  let body: { salt?: string; authKey?: string; blob?: Blob; iterations?: number }
   try {
     body = JSON.parse(raw) as typeof body
   } catch {
@@ -49,6 +51,11 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   if (!body.blob?.ciphertext) return Response.json({ error: 'blob_required' }, { status: 400 })
   if (blobShapeInvalid(body.blob)) return Response.json({ error: 'invalid_blob' }, { status: 400 })
   if (blobTooLarge(body.blob)) return Response.json({ error: 'blob_too_large' }, { status: 413 })
+  // 反復回数は部屋に残す。クライアントが後から既定値を変えても、
+  // その部屋は作られた時の値で鍵を導出できる（残さないと入室不能になる）
+  if (iterationsInvalid(body.iterations)) {
+    return Response.json({ error: 'invalid_iterations' }, { status: 400 })
+  }
 
   const roomId = generateRoomId()
   const now = Date.now()
@@ -58,6 +65,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
       roomId,
       salt: body.salt,
       authKeyHash: await hashAuthKey(body.authKey),
+      iterations: body.iterations,
       blob: body.blob,
       now,
     }),
@@ -155,6 +163,11 @@ async function handleDeleteRoom(request: Request, env: Env, roomId: string): Pro
 }
 
 async function handleWebSocket(request: Request, env: Env, roomId: string): Promise<Response> {
+  // ⚠ Upgrade を確認せずに DO へ渡すと、使われない WebSocket が DO 側に作られて
+  // Hibernation で生き残り続ける（ブロードキャストの相手も増える）
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    return Response.json({ error: 'websocket_upgrade_required' }, { status: 400 })
+  }
   const token = new URL(request.url).searchParams.get('token') ?? ''
   if (!(await verifyToken(token, roomId, env.TOKEN_SECRET, Date.now()))) {
     return Response.json({ error: 'unauthorized' }, { status: 401 })

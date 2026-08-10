@@ -39,6 +39,26 @@ describe('鍵導出', () => {
     expect(authKey).not.toBe(b64(encKeyBits))
   })
 
+  // 設計 §13-1 の「authKey から encKey が導出できないこと」。
+  // 「導出できない」ことは証明できないので、実際に成り立っている性質＝
+  // 【別の info から HKDF で分岐しており、片方から他方への単純な変換が存在しない】を固定する。
+  // ⚠ 単に「2つが違う」だけでは、片方が他方のハッシュでも通ってしまう
+  it('encKey は authKey の単純な変換ではない', async () => {
+    const { authKey, encKeyBits } = await deriveKeys('ことば', generateSalt(), FAST)
+    const enc = b64(encKeyBits)
+    const authBytes = Uint8Array.from(atob(authKey), (c) => c.charCodeAt(0))
+
+    // authKey そのもの／その SHA-256／その base64 のいずれとも一致しない
+    const sha = b64(await crypto.subtle.digest('SHA-256', authBytes))
+    expect(enc).not.toBe(authKey)
+    expect(enc).not.toBe(sha)
+    expect(enc).not.toBe(btoa(authKey))
+    // バイト単位でも相関が無い（一致するバイト数が偶然の範囲）
+    const encBytes = new Uint8Array(encKeyBits)
+    const same = authBytes.reduce((n, b, i) => n + (b === encBytes[i] ? 1 : 0), 0)
+    expect(same).toBeLessThan(8) // 32バイト中、偶然の一致は期待値0.125個
+  })
+
   it('鍵に合言葉の平文が含まれない', async () => {
     const { authKey, encKeyBits } = await deriveKeys('ひみつのことば', generateSalt(), FAST)
     expect(authKey).not.toContain('ひみつのことば')

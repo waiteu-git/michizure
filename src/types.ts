@@ -27,6 +27,21 @@ export const MAX_REQUEST_BYTES = 512 * 1024
 export const MAX_IV_CHARS = 64
 
 /**
+ * 認証失敗のカウンタが減衰するまでの時間。
+ * 減衰が無いと「先月打ち間違えた5回」が永久に効き、次の1回でいきなり長時間ロックされる。
+ * ⚠ これは誤操作の救済であって攻撃対策ではない。§7.4 の限界も参照
+ */
+export const GATE_DECAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 部屋ごとの PBKDF2 反復回数の許容範囲。
+ * 小さすぎる＝総当たりが容易／大きすぎる＝入室しようとした人の端末が固まる。
+ * どちらも部屋を作った人が他の参加者に押し付けられてしまうので、サーバーで挟む
+ */
+export const MIN_ITERATIONS = 100_000
+export const MAX_ITERATIONS = 5_000_000
+
+/**
  * 暗号文の「形」だけを見る。中身は読まない・読めない。
  * ⚠ ciphertext だけを見ていると iv など他のフィールドが素通りし、
  * サイズ上限をすり抜けて保存されてしまう。
@@ -36,6 +51,16 @@ export function blobShapeInvalid(blob: unknown): boolean {
   if (!b || typeof b.ciphertext !== 'string' || typeof b.iv !== 'string') return true
   if (b.iv.length > MAX_IV_CHARS) return true
   return false
+}
+
+/** 反復回数が「その部屋に入ろうとする他人の端末で走らせてよい範囲」か */
+export function iterationsInvalid(iterations: unknown): boolean {
+  return (
+    typeof iterations !== 'number' ||
+    !Number.isInteger(iterations) ||
+    iterations < MIN_ITERATIONS ||
+    iterations > MAX_ITERATIONS
+  )
 }
 export const ROOM_TTL_MS = 365 * 24 * 60 * 60 * 1000 // 最終アクセスから1年
 export const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30日

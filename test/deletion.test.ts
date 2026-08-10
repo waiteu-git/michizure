@@ -4,7 +4,7 @@ import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 import type { Room } from '../src/room'
 
-const FAST = 1000
+const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 
 async function createRoom(passphrase = 'けす') {
   const salt = generateSalt()
@@ -13,7 +13,7 @@ async function createRoom(passphrase = 'けす') {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
   })
   return { ...((await res.json()) as { roomId: string; token: string }), salt, authKey }
 }
@@ -54,7 +54,7 @@ describe('部屋の削除', () => {
     await del(room.roomId, room.authKey)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
     const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
-    expect(JSON.parse(dump)).toEqual([])
+    expect(JSON.parse(dump)).toEqual({})
   })
 })
 
@@ -90,7 +90,7 @@ describe('削除の抜け道', () => {
     expect(await blobStatus(room.roomId, room.token)).toBe(404)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
     const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
-    expect(JSON.parse(dump)).toEqual([])
+    expect(JSON.parse(dump)).toEqual({})
   })
 
   // enter だけをバックオフしても、同じ authKey を試せる経路が他にあれば意味がない
@@ -104,7 +104,76 @@ describe('削除の抜け道', () => {
   })
 })
 
+describe('認証の関門', () => {
+  it('入室に成功すると失敗回数がリセットされる', async () => {
+    const room = await createRoom('けす')
+    const wrong = (await deriveKeys('ちがう', room.salt, FAST)).authKey
+    const enter = (key: string) =>
+      SELF.fetch(`https://example.com/api/rooms/${room.roomId}/enter`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authKey: key }),
+      })
+
+    for (let i = 0; i < 4; i++) expect((await enter(wrong)).status).toBe(401)
+    expect((await enter(room.authKey)).status).toBe(200) // ここでリセット
+    // リセットされていれば、また4回外しても 429 にはならない
+    for (let i = 0; i < 4; i++) expect((await enter(wrong)).status).toBe(401)
+    expect((await enter(room.authKey)).status).toBe(200)
+  })
+
+  // 減衰が無いと「先月打ち間違えた5回」が永久に効き、次の1回でいきなり長時間ロックされる
+  it('古い失敗は時間で減衰する', async () => {
+    const room = await createRoom('けす')
+    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    await runInDurableObject(stub, async (i: Room) =>
+      i.setGateForTest({
+        failures: 20,
+        blockedUntil: Date.now() + 60 * 60 * 1000,
+        lastFailureAt: Date.now() - 25 * 60 * 60 * 1000, // 25時間前
+      }),
+    )
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/enter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authKey: room.authKey }),
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it('新しい失敗は減衰しない', async () => {
+    const room = await createRoom('けす')
+    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    await runInDurableObject(stub, async (i: Room) =>
+      i.setGateForTest({
+        failures: 20,
+        blockedUntil: Date.now() + 60 * 60 * 1000,
+        lastFailureAt: Date.now() - 60 * 1000, // 1分前
+      }),
+    )
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/enter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authKey: room.authKey }),
+    })
+    expect(res.status).toBe(429)
+  })
+})
+
 describe('自動削除', () => {
+  // alarm が仕掛かっていなければ「1年で自動削除」は無言で起きない
+  it('部屋を作ると1年後の alarm が仕掛かる', async () => {
+    const room = await createRoom()
+    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    const at = await runInDurableObject(stub, async (_i: Room, state: DurableObjectState) =>
+      state.storage.getAlarm(),
+    )
+    expect(at).not.toBeNull()
+    const year = 365 * 24 * 60 * 60 * 1000
+    expect(at! - Date.now()).toBeGreaterThan(year - 60_000)
+    expect(at! - Date.now()).toBeLessThanOrEqual(year)
+  })
+
   it('1年経過していれば alarm でデータが消える', async () => {
     const room = await createRoom()
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))

@@ -1,10 +1,11 @@
-import { SELF } from 'cloudflare:test'
+import { SELF, env, runInDurableObject } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
+import type { Room } from '../src/room'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 import { MAX_CIPHERTEXT_BYTES, ciphertextBytes } from '../src/types'
 
-const FAST = 1000
+const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 
 async function makeRoomPayload(passphrase = 'あいことば', name = '沖縄旅行') {
   const salt = generateSalt()
@@ -18,7 +19,7 @@ async function createRoom(overrides: Record<string, unknown> = {}) {
   return SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob, ...overrides }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST, ...overrides }),
   })
 }
 
@@ -70,7 +71,7 @@ async function createAndGet(passphrase = 'せいかい') {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
   })
   const json = (await res.json()) as { roomId: string; token: string }
   return { ...json, salt, authKey }
@@ -90,6 +91,38 @@ describe('入室', () => {
     const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/salt`)
     expect(res.status).toBe(200)
     expect(((await res.json()) as { salt: string }).salt).toBe(room.salt)
+  })
+
+  // 🔴 反復回数が部屋に残らないと、PBKDF2_ITERATIONS を変えた瞬間に
+  // それ以前に作られた部屋が全て入室不能・復号不能になる。
+  // 設計 §16 は実機測定後に反復回数を決め直す前提なので、必ず起きる
+  it('ソルトと一緒に、その部屋が作られた反復回数も返す', async () => {
+    const room = await createAndGet()
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/salt`)
+    const body = (await res.json()) as { salt: string; iterations: number }
+    expect(body.iterations).toBe(FAST)
+  })
+
+  it('極端な反復回数の部屋は作れない', async () => {
+    // 小さすぎる＝総当たりが容易／大きすぎる＝入室者の端末を固める
+    expect((await createRoom({ iterations: 1 })).status).toBe(400)
+    expect((await createRoom({ iterations: 100_000_000 })).status).toBe(400)
+    expect((await createRoom({ iterations: 'abc' })).status).toBe(400)
+  })
+
+  // 存在しない部屋IDを叩くだけでストレージが作られると、
+  // 総当たりで空の DO を無限に量産できる（alarm も無いので消えない）
+  it('存在しない部屋を読んでもストレージを作らない', async () => {
+    const ghost = 'ZZZZZZZZZZZZZZZZ'
+    await SELF.fetch(`https://example.com/api/rooms/${ghost}/salt`)
+    await SELF.fetch(`https://example.com/api/rooms/${ghost}/enter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authKey: 'dummy' }),
+    })
+    const stub = env.ROOM.get(env.ROOM.idFromName(ghost))
+    const dump = await runInDurableObject(stub, async (i: Room) => i.dumpForTest())
+    expect(JSON.parse(dump)).toEqual({})
   })
 
   it('正しい authKey でトークンを得る', async () => {
@@ -148,7 +181,7 @@ describe('暗号文', () => {
       await SELF.fetch('https://example.com/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ salt, authKey, blob: first }),
+        body: JSON.stringify({ salt, authKey, blob: first, iterations: FAST }),
       })
     ).json()) as { roomId: string; token: string }
 

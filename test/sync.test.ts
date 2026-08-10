@@ -1,9 +1,10 @@
-import { SELF } from 'cloudflare:test'
+import { SELF, env, runInDurableObject } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
+import type { Room } from '../src/room'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 
-const FAST = 1000
+const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 
 async function createRoom() {
   const salt = generateSalt()
@@ -15,7 +16,7 @@ async function createRoom() {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
   })
   return { ...((await res.json()) as { roomId: string; token: string }), encKeyBits }
 }
@@ -134,6 +135,64 @@ describe('WebSocket 中継', () => {
       headers: { Authorization: `Bearer ${room.token}` },
     })
     expect(((await res.json()) as { ciphertext: string }).ciphertext).toBe(blob.ciphertext)
+  })
+
+  // 🔴 書き込み経路は create / PUT / WS の3つある。形の検査を2つにだけ入れて
+  // WS を忘れると、iv の無い update 1通で部屋の唯一の暗号文と iv が同時に消える。
+  // サーバーは鍵も履歴も持たないので復旧手段が無い
+  it('iv の無い update では保存済みの暗号文が壊れない', async () => {
+    const room = await createRoom()
+    const a = await connect(room.roomId, room.token)
+    const before = await a.next()
+    expect(before.type).toBe('init')
+
+    a.ws.send(JSON.stringify({ type: 'update', blob: { ciphertext: 'QUJDRA==' } }))
+    await new Promise((r) => setTimeout(r, 200))
+
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      headers: { Authorization: `Bearer ${room.token}` },
+    })
+    const stored = (await res.json()) as { ciphertext: string; iv: string }
+    expect(stored.ciphertext).toBe(before.blob.ciphertext)
+    expect(stored.iv).toBe(before.blob.iv)
+    a.close()
+  })
+
+  it('巨大な iv の update も拒否する', async () => {
+    const room = await createRoom()
+    const a = await connect(room.roomId, room.token)
+    const before = await a.next()
+
+    a.ws.send(
+      JSON.stringify({
+        type: 'update',
+        blob: { ciphertext: 'QUJDRA==', iv: 'A'.repeat(100 * 1024), blobVersion: 1 },
+      }),
+    )
+    await new Promise((r) => setTimeout(r, 200))
+
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      headers: { Authorization: `Bearer ${room.token}` },
+    })
+    expect(((await res.json()) as { iv: string }).iv).toBe(before.blob.iv)
+    a.close()
+  })
+
+  // Upgrade を確認せずに WebSocketPair を作ると、使われない接続が DO に溜まり続ける
+  // （Hibernation なので生き残る）。ブロードキャストの相手も増える
+  it('Upgrade ヘッダのないリクエストでは WebSocket を作らない', async () => {
+    const room = await createRoom()
+    const res = await SELF.fetch(
+      `https://example.com/api/rooms/${room.roomId}/ws?token=${room.token}`,
+    )
+    expect(res.webSocket).toBeFalsy()
+    expect(res.status).toBe(400)
+
+    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    const count = await runInDurableObject(stub, async (_i: Room, state: DurableObjectState) =>
+      state.getWebSockets().length,
+    )
+    expect(count).toBe(0)
   })
 
   it('トークンなしの接続を拒否する', async () => {

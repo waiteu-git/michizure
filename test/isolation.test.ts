@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal, open } from '../src/box'
 
-const FAST = 1000
+const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 
 async function createRoom(passphrase: string, name: string) {
   const salt = generateSalt()
@@ -12,7 +12,7 @@ async function createRoom(passphrase: string, name: string) {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
   })
   return { ...((await res.json()) as { roomId: string; token: string }), encKeyBits, salt, authKey }
 }

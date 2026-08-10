@@ -5,7 +5,7 @@ import { generateSalt, deriveKeys } from '../src/keys.ts'
 import { seal, open } from '../src/box.ts'
 
 const BASE = process.env.MICHIZURE_BASE ?? 'http://localhost:8787'
-const ITERATIONS = 100_000 // 疎通確認なので本番より軽くしている
+const ITERATIONS = 100_000 // サーバーが受け付ける最小値
 const PASSPHRASE = 'おきなわのあいことば'
 
 let failures = 0
@@ -43,17 +43,18 @@ const blob = { ...(await seal(encKeyBits, state)), blobVersion: 1 }
 const createRes = await fetch(`${BASE}/api/rooms`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ salt, authKey, blob }),
+  body: JSON.stringify({ salt, authKey, blob, iterations: ITERATIONS }),
 })
 const created = await createRes.json()
 check('部屋を作れる', createRes.status === 200 && created.roomId?.length === 16, created.roomId)
 
 // 2. 別の端末として入り直す（URL と合言葉しか知らない状態）
 const saltRes = await fetch(`${BASE}/api/rooms/${created.roomId}/salt`)
-const { salt: fetchedSalt } = await saltRes.json()
+const { salt: fetchedSalt, iterations: roomIterations } = await saltRes.json()
 check('ソルトを認証前に取得できる', fetchedSalt === salt)
 
-const second = await deriveKeys(PASSPHRASE, fetchedSalt, ITERATIONS)
+check('反復回数も一緒に返る', roomIterations === ITERATIONS, String(roomIterations))
+const second = await deriveKeys(PASSPHRASE, fetchedSalt, roomIterations)
 const enterRes = await fetch(`${BASE}/api/rooms/${created.roomId}/enter`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },

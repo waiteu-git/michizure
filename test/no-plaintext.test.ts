@@ -4,7 +4,7 @@ import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 import type { Room } from '../src/room'
 
-const FAST = 1000
+const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 const SECRET_NAME = 'ヒミツノリョコウメイ'
 const SECRET_MEMBER = 'ヤマダタロウ'
 const SECRET_AMOUNT = 987654
@@ -24,7 +24,7 @@ async function createRoomWithSecrets() {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
   })
   return { ...((await res.json()) as { roomId: string; token: string }), authKey }
 }
@@ -37,7 +37,7 @@ describe('サーバーは平文を持たない', () => {
     const res = await SELF.fetch('https://example.com/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ salt, authKey, blob }),
+      body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
     })
     const text = await res.text()
     expect(text).not.toContain(SECRET_NAME)

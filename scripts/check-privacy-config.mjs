@@ -6,7 +6,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const toml = readFileSync(join(root, 'wrangler.toml'), 'utf8')
+const rawToml = readFileSync(join(root, 'wrangler.toml'), 'utf8')
+
+// ⚠ コメント行を落としてから判定する。落とさないと「# [observability] enabled = false」と
+// コメントアウトしただけで検査を素通りしてしまう（＝ログが復活しても誰も気づかない）
+const toml = rawToml
+  .split('\n')
+  .filter((line) => !/^\s*#/.test(line))
+  .join('\n')
 
 const failures = []
 
@@ -14,20 +21,29 @@ const failures = []
 //    Cloudflare 側にログが残る（無料プランで3日）。設計 §7.5・§11
 if (!/\[observability\][\s\S]*?enabled\s*=\s*false/.test(toml)) {
   failures.push(
-    'wrangler.toml に [observability] enabled = false がない。' +
+    'wrangler.toml に [observability] enabled = false がない（コメントアウトも不可）。' +
       '書かないと Workers Logs は既定で有効になり、ログが Cloudflare 側に保存される',
   )
 }
+if (/\[observability\][\s\S]*?enabled\s*=\s*true/.test(toml)) {
+  failures.push('[observability] enabled = true になっている。確認が終わったら false に戻すこと')
+}
 
 // 2) 本番のトークン署名鍵が [vars] に平文で入っていないこと。
-//    [vars] の値は wrangler types の生成物にもそのまま埋め込まれる
+//    [vars] の値は wrangler types の生成物にもそのまま埋め込まれる。
+//    ⚠ 行頭・二重引用符に限定すると、インデントや ' での記述をすり抜ける
 const devSecret = 'dev-only-secret-do-not-use-in-production'
-const tokenSecret = toml.match(/^TOKEN_SECRET\s*=\s*"([^"]*)"/m)
-if (tokenSecret && tokenSecret[1] !== devSecret) {
-  failures.push(
-    '[vars] の TOKEN_SECRET が開発用の既定値から変わっている。' +
-      '本番の鍵は wrangler secret put TOKEN_SECRET で設定すること（wrangler.toml に書かない）',
-  )
+const tokenSecret = toml.match(/\bTOKEN_SECRET\s*=\s*(?:"([^"]*)"|'([^']*)')/)
+if (tokenSecret) {
+  const value = tokenSecret[1] ?? tokenSecret[2]
+  if (value !== devSecret) {
+    failures.push(
+      '[vars] の TOKEN_SECRET が開発用の既定値から変わっている。' +
+        '本番の鍵は wrangler secret put TOKEN_SECRET で設定すること（wrangler.toml に書かない）',
+    )
+  }
+} else {
+  failures.push('wrangler.toml に TOKEN_SECRET の記述が見当たらない（検査が空振りしている）')
 }
 
 // 3) IP を含むヘッダを読むコードが入り込んでいないこと。
@@ -47,8 +63,12 @@ for (const file of globSync('src/**/*.ts', { cwd: root })) {
     }
   }
   // 全ヘッダを展開するイディオム。cf-connecting-ip がログに出る
-  if (/(new map\(|object\.fromentries\()\s*\w*\.?headers/.test(source)) {
+  if (/(new map\(|object\.fromentries\(|\.\.\.\s*\w*\.?headers)/.test(source)) {
     failures.push(`${file} が全ヘッダを展開している。IP を含むヘッダがログに出る`)
+  }
+  // request.cf は IP ではないが、国・市・ASN 等の位置情報を含む
+  if (/\brequest\.cf\b|\breq\.cf\b/.test(source)) {
+    failures.push(`${file} が request.cf を参照している。位置情報が入るので扱いを確認すること`)
   }
 }
 

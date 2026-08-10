@@ -27,8 +27,8 @@ node scripts/e2e-local.mjs
 | メソッド | パス | 認証 | 用途 |
 |---|---|---|---|
 | GET | `/api/health` | なし | 死活確認 |
-| POST | `/api/rooms` | なし | 部屋を作る（`{salt, authKey, blob}`）|
-| GET | `/api/rooms/:id/salt` | なし | 鍵導出に要るソルト。秘密ではない |
+| POST | `/api/rooms` | なし | 部屋を作る（`{salt, authKey, iterations, blob}`）|
+| GET | `/api/rooms/:id/salt` | なし | 鍵導出に要る `{salt, iterations}`。秘密ではない |
 | POST | `/api/rooms/:id/enter` | `authKey` | 入室してトークンを得る |
 | GET/PUT | `/api/rooms/:id/blob` | Bearer | 暗号文の取得・更新 |
 | GET | `/api/rooms/:id/ws?token=` | トークン | WebSocket で中継を受ける |
@@ -58,6 +58,15 @@ node scripts/bench-pbkdf2.mjs   # Mac での基準値（速い側の下限）
 実機の値は `bench/pbkdf2.html` を端末で開いて測る。**判断は実機の値で行う。** サーバー側や Mac の数値は参考にならない（一番遅い端末が体験を決める）。
 
 ⚠ このページは端末にダウンロードして直接開く（`file://`）か `https://` で開くこと。Mac で簡易サーバーを立てて `http://192.168.x.x:8000/` のように LAN の IP で開くと、安全なコンテキストにならず `crypto.subtle` が使えない。
+
+## 既知の限界（塞いでいない・承知のうえ）
+
+- **部屋の作成にレート制限が無い。** 無認証で部屋を作れるので、大量作成でストレージを埋められる。
+  コード側で防ぐには状態か IP が要り、IP は読まない方針なので**Cloudflare 側のレート制限で対処する**（公開時にユーザーが設定）
+- **合言葉を外し続ければ、その部屋を締め出せる。** URL を知っている人なら誰でもできる。
+  クライアントを区別するには IP が要るが読まない方針なので、**「IPを読まない」の代償として受け入れている**。
+  失敗回数は24時間で減衰するので、打ち間違いが恒久的に効くことはない
+- **WebSocket は接続後にトークンを再検証しない。** 接続中はトークンの期限切れ後も更新を送れる
 
 ## 設計上の注意
 
