@@ -56,6 +56,33 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   })
 }
 
+async function handleSalt(env: Env, roomId: string): Promise<Response> {
+  const res = await roomStub(env, roomId).fetch('https://do/salt')
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+async function handleEnterRoom(request: Request, env: Env, roomId: string): Promise<Response> {
+  let body: { authKey?: string }
+  try {
+    body = (await request.json()) as typeof body
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 })
+  }
+  if (!body.authKey) return Response.json({ error: 'auth_key_required' }, { status: 400 })
+
+  const now = Date.now()
+  const res = await roomStub(env, roomId).fetch('https://do/enter', {
+    method: 'POST',
+    body: JSON.stringify({ authKeyHash: await hashAuthKey(body.authKey), now }),
+  })
+  if (!res.ok) return new Response(res.body, { status: res.status })
+
+  return Response.json({ token: await issueToken(roomId, env.TOKEN_SECRET, TOKEN_TTL_MS, now) })
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
@@ -63,6 +90,13 @@ export default {
     if (url.pathname === '/api/rooms' && request.method === 'POST') {
       return handleCreateRoom(request, env)
     }
+
+    const saltMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/salt$/)
+    if (saltMatch && request.method === 'GET') return handleSalt(env, saltMatch[1])
+
+    const enterMatch = url.pathname.match(/^\/api\/rooms\/([0-9A-Z]{16})\/enter$/)
+    if (enterMatch && request.method === 'POST') return handleEnterRoom(request, env, enterMatch[1])
+
     return new Response('Not Found', { status: 404 })
   },
 } satisfies ExportedHandler<Env>

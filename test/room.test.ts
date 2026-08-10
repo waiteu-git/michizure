@@ -49,3 +49,60 @@ describe('部屋の作成', () => {
     expect((await createRoom({ blob })).status).toBe(413)
   })
 })
+
+async function createAndGet(passphrase = 'せいかい') {
+  const salt = generateSalt()
+  const { authKey, encKeyBits } = await deriveKeys(passphrase, salt, FAST)
+  const blob = {
+    ...(await seal(encKeyBits, { name: 'X', members: [], bookings: [] })),
+    blobVersion: 1,
+  }
+  const res = await SELF.fetch('https://example.com/api/rooms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ salt, authKey, blob }),
+  })
+  const json = (await res.json()) as { roomId: string; token: string }
+  return { ...json, salt, authKey }
+}
+
+async function enter(roomId: string, authKey: string) {
+  return SELF.fetch(`https://example.com/api/rooms/${roomId}/enter`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authKey }),
+  })
+}
+
+describe('入室', () => {
+  it('ソルトを認証前に取得できる', async () => {
+    const room = await createAndGet()
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/salt`)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { salt: string }).salt).toBe(room.salt)
+  })
+
+  it('正しい authKey でトークンを得る', async () => {
+    const room = await createAndGet()
+    const res = await enter(room.roomId, room.authKey)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { token: string }).token).toBeTruthy()
+  })
+
+  it('誤った authKey を拒否する', async () => {
+    const room = await createAndGet('せいかい')
+    const wrong = (await deriveKeys('まちがい', room.salt, FAST)).authKey
+    expect((await enter(room.roomId, wrong)).status).toBe(401)
+  })
+
+  it('存在しない部屋は404を返す', async () => {
+    expect((await enter('ZZZZZZZZZZZZZZZZ', 'anything')).status).toBe(404)
+  })
+
+  it('連続failで429になり、その後は正解でも弾かれる', async () => {
+    const room = await createAndGet('せいかい')
+    const wrong = (await deriveKeys('まちがい', room.salt, FAST)).authKey
+    for (let i = 0; i < 5; i++) await enter(room.roomId, wrong)
+    expect((await enter(room.roomId, room.authKey)).status).toBe(429)
+  })
+})
