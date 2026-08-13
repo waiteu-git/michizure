@@ -116,6 +116,15 @@ const spare = accepted.filter((_, i) => !selectedIdx.has(i))
 
 writeFileSync(join(root, 'wordlist/michizure-ja-1024.txt'), selected.join('\n') + '\n')
 
+// 機械が読む版も同じ工程で作る。⚠ 人が読む .txt と別々に作ると必ずズレるので、
+// 出所を1つにして両方をここから出す（一致は scripts/check-wordlist.mjs が検査する）
+writeFileSync(
+  join(root, 'src/client/wordlist-data.ts'),
+  `// 自動生成。直接編集しない（npm run build:wordlist で作り直す）\n` +
+    `// 出所: wordlist/michizure-ja-1024.txt\n` +
+    `export const WORDS = ${JSON.stringify(selected)} as const\n`,
+)
+
 const byLen = (list) =>
   [3, 4, 5].map((n) => `${n}字 ${list.filter((w) => w.length === n).length}`).join(' / ')
 

@@ -5,14 +5,14 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "npm run build:crypto && wrangler dev",
-    "deploy": "npm run build:crypto && wrangler deploy",
+    "dev": "npm run build:client && wrangler dev",
+    "deploy": "npm run build:client && wrangler deploy",
     "pretest": "node scripts/check-privacy-config.mjs && node scripts/check-wordlist.mjs",
     "build:wordlist": "node scripts/build-wordlist.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "wrangler types && tsc --noEmit",
-    "build:crypto": "esbuild src/browser-crypto.ts --bundle --format=esm --outfile=public/crypto.js"
+    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
+    "build:client": "esbuild src/client/app.ts --bundle --format=esm --outfile=public/app.js"
   },
   "repository": {
     "type": "git",

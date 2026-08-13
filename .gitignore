@@ -10,4 +10,4 @@ dist/
 
 # src/ から生成するブラウザ向け暗号層。⚠ 追跡しない＝古い版が残る経路を作らない
 # （dev と deploy が毎回作り直す。src が唯一の出所であることを構造で守る）
-public/crypto.js
+public/app.js

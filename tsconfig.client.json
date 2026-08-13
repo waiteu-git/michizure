@@ -1,0 +1,12 @@
+{
+  // ブラウザで動くコードだけを、DOM の型ありで検査する。
+  // ⚠ Worker 側の tsconfig に "DOM" を足してはいけない。足すと
+  // localStorage や document を Worker のコードで書けてしまい、
+  // 型検査を通ったまま実行時に落ちる（Worker には存在しない）。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2022", "DOM"],
+    "types": []
+  },
+  "include": ["src/client/**/*.ts", "src/keys.ts", "src/box.ts", "src/types.ts"]
+}

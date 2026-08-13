@@ -3,84 +3,173 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Michizure — 配線の確認</title>
+    <title>Michizure — 旅の費用を、道連れと</title>
     <style>
+      :root {
+        --bg: #fbfaf8;
+        --fg: #1f2328;
+        --muted: #6b7280;
+        --line: #e5e3df;
+        --accent: #0d7d6c;
+        --pay: #c2410c;
+        --recv: #0d7d6c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16181c;
+          --fg: #e8e6e3;
+          --muted: #9aa1ab;
+          --line: #2c3038;
+          --accent: #3fbfa8;
+          --pay: #f08a5d;
+          --recv: #3fbfa8;
+        }
+      }
+      * { box-sizing: border-box; }
       body {
-        font-family: system-ui, -apple-system, sans-serif;
-        max-width: 40rem;
-        margin: 2rem auto;
-        padding: 0 1rem;
+        font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+        background: var(--bg); color: var(--fg);
+        max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem 5rem;
         line-height: 1.7;
       }
+      h1 { font-size: 1.35rem; margin: 0 0 .2rem; }
+      h2 { font-size: 1.05rem; margin: 1.8rem 0 .6rem; }
+      h3 { font-size: .95rem; margin: 1.4rem 0 .5rem; }
+      .muted { color: var(--muted); font-size: .875rem; }
+      input, select, button { font: inherit; }
+      input, select {
+        width: 100%; padding: .6rem .7rem; border: 1px solid var(--line);
+        border-radius: 8px; background: var(--bg); color: var(--fg);
+      }
+      label.field { display: block; margin: .7rem 0; }
+      label.field span { display: block; font-size: .85rem; color: var(--muted); margin-bottom: .2rem; }
+      button {
+        padding: .6rem 1rem; border-radius: 8px; border: 1px solid var(--accent);
+        background: var(--accent); color: #fff; cursor: pointer;
+      }
+      button.ghost, button.link {
+        background: transparent; color: var(--fg); border-color: var(--line);
+      }
+      button.link { border: none; text-decoration: underline; padding: .3rem 0; }
+      button[disabled] { opacity: .5; cursor: default; }
       .row {
-        display: flex;
-        gap: 0.75rem;
-        padding: 0.4rem 0;
-        border-bottom: 1px solid #eee;
+        display: flex; gap: .6rem; align-items: center; justify-content: space-between;
+        padding: .5rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap;
       }
-      .ok {
-        color: #0a7;
-        font-weight: 700;
+      .card { border: 1px solid var(--line); border-radius: 10px; padding: .7rem .8rem; margin: .5rem 0; }
+      .card.done { opacity: .55; }
+      .card-head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+      .amount { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 700; }
+      .paid { display: flex; gap: .8rem; flex-wrap: wrap; margin-top: .4rem; font-size: .875rem; }
+      .paid input { width: auto; }
+      .chip {
+        display: inline-block; padding: .2rem .6rem; margin: .15rem .2rem .15rem 0;
+        border: 1px solid var(--line); border-radius: 999px; font-size: .85rem;
       }
-      .ng {
-        color: #c33;
-        font-weight: 700;
+      .pay { color: var(--pay); font-weight: 700; }
+      .recv, .ok { color: var(--recv); font-weight: 700; }
+      .passbox {
+        border: 2px solid var(--accent); border-radius: 10px; padding: 1rem;
+        font-size: 1.15rem; font-weight: 700; letter-spacing: .02em; word-break: break-all;
+        text-align: center; margin: .8rem 0;
       }
-      code {
-        background: #f4f4f4;
-        padding: 0.1em 0.35em;
-        border-radius: 3px;
+      .warn {
+        border-left: 3px solid var(--pay); padding: .5rem .8rem; margin: 1rem 0;
+        font-size: .9rem; background: color-mix(in srgb, var(--pay) 8%, transparent);
       }
+      #toast {
+        position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
+        background: var(--fg); color: var(--bg); padding: .6rem 1rem; border-radius: 8px;
+        opacity: 0; transition: opacity .2s; pointer-events: none; font-size: .9rem;
+      }
+      #toast.on { opacity: 1; }
+      .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
     </style>
   </head>
   <body>
-    <h1>Michizure — 配線の確認</h1>
-    <p>
-      これは Phase 1b の足場が通っているかを確かめるだけのページです。画面はまだありません。
-    </p>
-    <div id="out"></div>
+    <section id="home" hidden>
+      <h1>Michizure</h1>
+      <p class="muted">旅行の費用を記録して、精算まで見届ける。</p>
 
-    <script type="module">
-      import { deriveKeys, generateSalt, seal, open } from './crypto.js'
+      <h2>新しい旅行を作る</h2>
+      <label class="field"><span>旅行の名前</span>
+        <input id="newName" placeholder="沖縄旅行" /></label>
+      <label class="field"><span>合言葉（空のままなら自動で作ります）</span>
+        <input id="customPass" placeholder="自動生成" autocomplete="off" /></label>
+      <button id="createBtn">作る</button>
 
-      const out = document.getElementById('out')
-      const show = (label, ok, detail = '') => {
-        const div = document.createElement('div')
-        div.className = 'row'
-        div.innerHTML = `<span class="${ok ? 'ok' : 'ng'}">${ok ? 'OK' : 'NG'}</span>
-          <span>${label}${detail ? ` — <code>${detail}</code>` : ''}</span>`
-        out.appendChild(div)
-      }
+      <div id="remembered"></div>
 
-      show('静的配信が通っている', true, location.pathname)
+      <h2>合言葉で入る</h2>
+      <button class="ghost" id="toJoin">部屋のIDと合言葉を入力する</button>
+    </section>
 
-      try {
-        const res = await fetch('/api/health')
-        show('/api/* が Worker へ届く（静的配信に食われていない）', res.ok, `HTTP ${res.status}`)
-      } catch (e) {
-        show('/api/* が Worker へ届く', false, String(e))
-      }
+    <section id="created" hidden>
+      <h1>できました</h1>
+      <p>この合言葉が、部屋を開ける唯一の鍵です。</p>
+      <div class="passbox" id="shownPass"></div>
+      <div class="actions">
+        <button id="copyPass">合言葉をコピー</button>
+        <button class="ghost" id="copyUrl">リンクをコピー</button>
+      </div>
+      <p class="muted" id="shownUrl"></p>
 
-      // 🔴 主張ではなく実行で確かめる: Worker と同じ暗号層がブラウザで動くか
-      try {
-        const salt = generateSalt()
-        const t0 = performance.now()
-        const { authKey, encKeyBits } = await deriveKeys('みずうみ', salt, 100_000)
-        const ms = Math.round(performance.now() - t0)
-        show('鍵導出がブラウザで動く（PBKDF2 10万回）', !!authKey, `${ms}ms`)
+      <div class="warn">
+        <b>合言葉を無くすと、中のデータは誰にも戻せません。</b>
+        サーバーは鍵を持っていないので、こちらでも開けられません。今すぐ控えてください。
+      </div>
+      <p class="muted">
+        リンクと合言葉は<b>別々に渡す</b>ことをおすすめします。まとめて送ると、
+        その1通が漏れただけで部屋が開かれます。
+      </p>
+      <button id="enterRoomBtn">旅行を開く</button>
+    </section>
 
-        const state = { name: '沖縄旅行', members: [], bookings: [] }
-        const blob = await seal(encKeyBits, state)
-        const back = await open(encKeyBits, blob.ciphertext, blob.iv)
-        show('暗号化して復号すると元に戻る', JSON.stringify(back) === JSON.stringify(state))
+    <section id="join" hidden>
+      <h1>合言葉で入る</h1>
+      <label class="field"><span>部屋のID（リンクの末尾16文字）</span>
+        <input id="joinRoom" autocapitalize="characters" autocomplete="off" /></label>
+      <label class="field"><span>合言葉</span>
+        <input id="joinPass" autocomplete="off" placeholder="ひかん・じだい・…" /></label>
+      <div class="actions">
+        <button id="joinBtn">入る</button>
+        <button class="ghost" id="toHome">戻る</button>
+      </div>
+      <p class="muted">区切りは中黒でも空白でも構いません。カタカナで打っても入れます。</p>
+    </section>
 
-        // 濁点の持ち方が違っても同じ鍵になること（NFC 正規化）
-        const a = await deriveKeys('みずうみ', salt, 1000)
-        const b = await deriveKeys('みずうみ'.normalize('NFD'), salt, 1000)
-        show('濁点の表し方が違っても同じ鍵になる', a.authKey === b.authKey)
-      } catch (e) {
-        show('暗号層がブラウザで動く', false, String(e))
-      }
-    </script>
+    <section id="room" hidden>
+      <h1 id="roomName"></h1>
+
+      <h2>メンバー</h2>
+      <div id="members"></div>
+      <div class="actions">
+        <input id="newMember" placeholder="名前" style="flex:1" />
+        <button id="addMemberBtn">追加</button>
+      </div>
+
+      <h2>記録</h2>
+      <div id="bookings"></div>
+      <label class="field"><span>種類</span>
+        <select id="category">
+          <option>航空券</option><option>宿泊</option><option>食費</option>
+          <option>交通費</option><option>アクティビティ</option><option>その他</option>
+        </select></label>
+      <label class="field"><span>内容</span><input id="description" placeholder="夕食" /></label>
+      <label class="field"><span>金額</span><input id="amount" type="number" inputmode="numeric" /></label>
+      <label class="field"><span>立て替えた人</span><select id="payer"></select></label>
+      <button id="addBookingBtn">記録する</button>
+
+      <h2>精算</h2>
+      <div id="summary"></div>
+      <div id="transfers"></div>
+
+      <div class="actions" style="margin-top:2rem">
+        <button class="ghost" id="toHome">入口に戻る</button>
+      </div>
+    </section>
+
+    <div id="toast"></div>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

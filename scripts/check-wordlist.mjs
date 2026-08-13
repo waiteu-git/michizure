@@ -56,6 +56,20 @@ if (badLen.length > 0) {
   failures.push(`長さの条件を外れる語が ${badLen.length} 語ある（例: ${badLen[0]}）`)
 }
 
+// 🔴 人が読む .txt と機械が読む .ts がズレていないか。
+// ズレると「目視で確認したリスト」と「実際に配られるリスト」が別物になる
+const dataPath = join(root, 'src/client/wordlist-data.ts')
+if (!existsSync(dataPath)) {
+  failures.push('src/client/wordlist-data.ts がない（npm run build:wordlist で生成）')
+} else {
+  const m = readFileSync(dataPath, 'utf8').match(/export const WORDS = (\[[\s\S]*?\]) as const/)
+  const fromTs = m ? JSON.parse(m[1]) : null
+  if (!fromTs) failures.push('src/client/wordlist-data.ts を解釈できない')
+  else if (JSON.stringify(fromTs) !== JSON.stringify(words)) {
+    failures.push('wordlist-data.ts が .txt と一致しない（npm run build:wordlist で作り直す）')
+  }
+}
+
 const collide = (fn, label) => {
   const seen = new Map()
   for (const w of words) {

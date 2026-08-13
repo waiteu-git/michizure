@@ -12,5 +12,7 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"],
+  // クライアントは DOM の型が要るので tsconfig.client.json で別に検査する
+  "exclude": ["src/client/**/*.ts"]
 }
