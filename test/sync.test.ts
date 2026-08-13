@@ -16,7 +16,7 @@ async function createRoom() {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST, kdfVersion: 1 }),
   })
   return { ...((await res.json()) as { roomId: string; token: string }), encKeyBits }
 }

@@ -27,8 +27,8 @@ node scripts/e2e-local.mjs
 | メソッド | パス | 認証 | 用途 |
 |---|---|---|---|
 | GET | `/api/health` | なし | 死活確認 |
-| POST | `/api/rooms` | なし | 部屋を作る（`{salt, authKey, iterations, blob}`）|
-| GET | `/api/rooms/:id/salt` | なし | 鍵導出に要る `{salt, iterations}`。秘密ではない |
+| POST | `/api/rooms` | なし | 部屋を作る（`{salt, authKey, iterations, kdfVersion, blob}`）|
+| GET | `/api/rooms/:id/salt` | なし | 鍵導出に要る `{salt, iterations, kdfVersion}`。秘密ではない |
 | POST | `/api/rooms/:id/enter` | `authKey` | 入室してトークンを得る |
 | GET/PUT | `/api/rooms/:id/blob` | Bearer | 暗号文の取得・更新 |
 | GET | `/api/rooms/:id/ws?token=` | トークン | WebSocket で中継を受ける |

@@ -43,7 +43,7 @@ const blob = { ...(await seal(encKeyBits, state)), blobVersion: 1 }
 const createRes = await fetch(`${BASE}/api/rooms`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ salt, authKey, blob, iterations: ITERATIONS }),
+  body: JSON.stringify({ salt, authKey, blob, iterations: ITERATIONS, kdfVersion: 1 }),
 })
 const created = await createRes.json()
 check('部屋を作れる', createRes.status === 200 && created.roomId?.length === 16, created.roomId)

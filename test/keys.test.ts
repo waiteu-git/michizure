@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateSalt, deriveKeys } from '../src/keys'
+import { generateSalt, deriveKeys, normalizePassphrase } from '../src/keys'
 
 const FAST = 1000 // テスト用の低い反復回数
 
@@ -29,6 +29,55 @@ describe('鍵導出', () => {
   it('ソルトは毎回異なる', () => {
     const salts = new Set(Array.from({ length: 50 }, () => generateSalt()))
     expect(salts.size).toBe(50)
+  })
+
+  // 🔴 正規化は鍵導出の契約そのもの。ここが変わると既存の部屋が開けなくなる。
+  // どの入力が同じ鍵になるか／ならないかを、規則ごと固定する
+  describe('正規化（kdfVersion 1）', () => {
+    const same = (a: string, b: string) =>
+      expect(normalizePassphrase(a)).toBe(normalizePassphrase(b))
+    const differ = (a: string, b: string) =>
+      expect(normalizePassphrase(a)).not.toBe(normalizePassphrase(b))
+
+    it('区切り方が違っても同じになる', () => {
+      const canonical = 'ひかんじだいえのぐ'
+      for (const input of [
+        'ひかん・じだい・えのぐ',
+        'ひかん じだい えのぐ',
+        'ひかん　じだい　えのぐ',
+        'ひかん、じだい、えのぐ',
+        'ひかん-じだい-えのぐ',
+        'ひかん/じだい/えのぐ',
+        '  ひかん じだい えのぐ  ',
+      ]) {
+        expect(normalizePassphrase(input)).toBe(canonical)
+      }
+    })
+
+    it('カタカナ・半角カタカナ・全角英数を畳む', () => {
+      same('ひかんじだい', 'ヒカンジダイ')
+      same('ひかんじだい', 'ﾋｶﾝｼﾞﾀﾞｲ') // 半角カタカナ（濁点つき）
+      same('abc123', 'ａｂｃ１２３')
+    })
+
+    it('濁点の表し方が違っても同じになる', () => {
+      same('みずうみ', 'みずうみ'.normalize('NFD'))
+      same('パンプキン', 'ぱんぷきん')
+    })
+
+    // 🔴 長音は単語の一部。区切りとして落とすと「こーひー」が「こひ」になる
+    it('長音記号は落とさない', () => {
+      expect(normalizePassphrase('コーヒー')).toBe('こーひー')
+      differ('コーヒー', 'コヒ')
+    })
+
+    it('英字の大小は畳まない（カスタム合言葉では素直に情報になる）', () => {
+      differ('Secret', 'secret')
+    })
+
+    it('未知の kdfVersion では導出しない（黙って別の鍵を作らない）', () => {
+      expect(() => normalizePassphrase('あ', 2)).toThrow()
+    })
   })
 
   // 🔴 生成した日本語の合言葉を配る設計なので、ここが崩れると

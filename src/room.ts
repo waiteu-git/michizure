@@ -67,6 +67,7 @@ export class Room extends DurableObject {
       salt: string
       authKeyHash: string
       iterations: number
+      kdfVersion: number
       blob: Blob
       now: number
     }
@@ -82,6 +83,7 @@ export class Room extends DurableObject {
       salt: body.salt,
       authKeyHash: body.authKeyHash,
       iterations: body.iterations,
+      kdfVersion: body.kdfVersion,
     })
     this.put('blob', body.blob)
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
@@ -89,11 +91,16 @@ export class Room extends DurableObject {
   }
 
   private handleSalt(): Response {
-    const auth = this.get<{ salt: string; iterations: number }>('auth')
+    const auth = this.get<{ salt: string; iterations: number; kdfVersion: number }>('auth')
     if (auth === null) return Response.json({ error: 'not_found' }, { status: 404 })
     // ソルトは秘密ではない。認証前に渡さないとクライアントが鍵を導出できない。
-    // iterations も同じ理由で返す（その部屋が作られた時の値でしか鍵は再現しない）
-    return Response.json({ salt: auth.salt, iterations: auth.iterations })
+    // iterations と kdfVersion も同じ理由で返す
+    // （その部屋が作られた時の反復回数と正規化規則でしか鍵は再現しない）
+    return Response.json({
+      salt: auth.salt,
+      iterations: auth.iterations,
+      kdfVersion: auth.kdfVersion,
+    })
   }
 
   /**

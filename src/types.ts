@@ -42,6 +42,24 @@ export const MIN_ITERATIONS = 100_000
 export const MAX_ITERATIONS = 5_000_000
 
 /**
+ * 🔴 鍵導出の規則そのものの版。**正規化の規則と HKDF の info 文字列を含む。**
+ *
+ * 鍵は「合言葉 → 正規化 → PBKDF2(salt, 反復回数) → HKDF(info)」で決まる。
+ * salt と反復回数は部屋ごとに保存して後から変えられるようにしたが、
+ * **正規化と info は保存していなかった**＝変えた瞬間に既存の部屋が全部開けなくなる。
+ * （反復回数で一度学んだのと同じ形。効くべき面を数え損ねていた）
+ *
+ * ⇒ 部屋ごとに保存し、その部屋が作られた時の規則で導出する。
+ * これにより「NFKC を選ぶ」という規格からの逸脱も、後から取り消せる判断になる。
+ */
+export const KDF_VERSION = 1
+const KNOWN_KDF_VERSIONS = [1]
+
+export function kdfVersionInvalid(v: unknown): boolean {
+  return typeof v !== 'number' || !KNOWN_KDF_VERSIONS.includes(v)
+}
+
+/**
  * 暗号文の「形」だけを見る。中身は読まない・読めない。
  * ⚠ ciphertext だけを見ていると iv など他のフィールドが素通りし、
  * サイズ上限をすり抜けて保存されてしまう。

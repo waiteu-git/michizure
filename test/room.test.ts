@@ -19,7 +19,7 @@ async function createRoom(overrides: Record<string, unknown> = {}) {
   return SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob, iterations: FAST, ...overrides }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST, kdfVersion: 1, ...overrides }),
   })
 }
 
@@ -71,7 +71,7 @@ async function createAndGet(passphrase = 'せいかい') {
   const res = await SELF.fetch('https://example.com/api/rooms', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ salt, authKey, blob, iterations: FAST }),
+    body: JSON.stringify({ salt, authKey, blob, iterations: FAST, kdfVersion: 1 }),
   })
   const json = (await res.json()) as { roomId: string; token: string }
   return { ...json, salt, authKey }
@@ -101,6 +101,19 @@ describe('入室', () => {
     const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/salt`)
     const body = (await res.json()) as { salt: string; iterations: number }
     expect(body.iterations).toBe(FAST)
+  })
+
+  // 🔴 正規化の規則も鍵を決める。保存しないと、規則を変えた瞬間に既存の部屋が開けなくなる
+  it('ソルトと一緒に、その部屋の正規化規則の版も返す', async () => {
+    const room = await createAndGet()
+    const res = await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/salt`)
+    expect(((await res.json()) as { kdfVersion: number }).kdfVersion).toBe(1)
+  })
+
+  it('kdfVersion が無い／未知なら部屋を作れない', async () => {
+    expect((await createRoom({ kdfVersion: undefined })).status).toBe(400)
+    expect((await createRoom({ kdfVersion: 99 })).status).toBe(400)
+    expect((await createRoom({ kdfVersion: '1' })).status).toBe(400)
   })
 
   it('極端な反復回数の部屋は作れない', async () => {
@@ -181,7 +194,7 @@ describe('暗号文', () => {
       await SELF.fetch('https://example.com/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ salt, authKey, blob: first, iterations: FAST }),
+        body: JSON.stringify({ salt, authKey, blob: first, iterations: FAST, kdfVersion: 1 }),
       })
     ).json()) as { roomId: string; token: string }
 

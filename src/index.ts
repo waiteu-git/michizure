@@ -7,6 +7,7 @@ import {
   blobShapeInvalid,
   ciphertextBytes,
   iterationsInvalid,
+  kdfVersionInvalid,
   type Blob,
 } from './types.ts'
 
@@ -40,7 +41,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   if (raw.length > MAX_REQUEST_BYTES) {
     return Response.json({ error: 'blob_too_large' }, { status: 413 })
   }
-  let body: { salt?: string; authKey?: string; blob?: Blob; iterations?: number }
+  let body: { salt?: string; authKey?: string; blob?: Blob; iterations?: number; kdfVersion?: number }
   try {
     body = JSON.parse(raw) as typeof body
   } catch {
@@ -56,6 +57,10 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   if (iterationsInvalid(body.iterations)) {
     return Response.json({ error: 'invalid_iterations' }, { status: 400 })
   }
+  // 正規化の規則も部屋ごとに残す（変えると既存の部屋が開けなくなるため）
+  if (kdfVersionInvalid(body.kdfVersion)) {
+    return Response.json({ error: 'invalid_kdf_version' }, { status: 400 })
+  }
 
   const roomId = generateRoomId()
   const now = Date.now()
@@ -66,6 +71,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
       salt: body.salt,
       authKeyHash: await hashAuthKey(body.authKey),
       iterations: body.iterations,
+      kdfVersion: body.kdfVersion,
       blob: body.blob,
       now,
     }),
