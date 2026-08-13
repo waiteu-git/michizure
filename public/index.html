@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Michizure — 配線の確認</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.7;
+      }
+      .row {
+        display: flex;
+        gap: 0.75rem;
+        padding: 0.4rem 0;
+        border-bottom: 1px solid #eee;
+      }
+      .ok {
+        color: #0a7;
+        font-weight: 700;
+      }
+      .ng {
+        color: #c33;
+        font-weight: 700;
+      }
+      code {
+        background: #f4f4f4;
+        padding: 0.1em 0.35em;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Michizure — 配線の確認</h1>
+    <p>
+      これは Phase 1b の足場が通っているかを確かめるだけのページです。画面はまだありません。
+    </p>
+    <div id="out"></div>
+
+    <script type="module">
+      import { deriveKeys, generateSalt, seal, open } from './crypto.js'
+
+      const out = document.getElementById('out')
+      const show = (label, ok, detail = '') => {
+        const div = document.createElement('div')
+        div.className = 'row'
+        div.innerHTML = `<span class="${ok ? 'ok' : 'ng'}">${ok ? 'OK' : 'NG'}</span>
+          <span>${label}${detail ? ` — <code>${detail}</code>` : ''}</span>`
+        out.appendChild(div)
+      }
+
+      show('静的配信が通っている', true, location.pathname)
+
+      try {
+        const res = await fetch('/api/health')
+        show('/api/* が Worker へ届く（静的配信に食われていない）', res.ok, `HTTP ${res.status}`)
+      } catch (e) {
+        show('/api/* が Worker へ届く', false, String(e))
+      }
+
+      // 🔴 主張ではなく実行で確かめる: Worker と同じ暗号層がブラウザで動くか
+      try {
+        const salt = generateSalt()
+        const t0 = performance.now()
+        const { authKey, encKeyBits } = await deriveKeys('みずうみ', salt, 100_000)
+        const ms = Math.round(performance.now() - t0)
+        show('鍵導出がブラウザで動く（PBKDF2 10万回）', !!authKey, `${ms}ms`)
+
+        const state = { name: '沖縄旅行', members: [], bookings: [] }
+        const blob = await seal(encKeyBits, state)
+        const back = await open(encKeyBits, blob.ciphertext, blob.iv)
+        show('暗号化して復号すると元に戻る', JSON.stringify(back) === JSON.stringify(state))
+
+        // 濁点の持ち方が違っても同じ鍵になること（NFC 正規化）
+        const a = await deriveKeys('みずうみ', salt, 1000)
+        const b = await deriveKeys('みずうみ'.normalize('NFD'), salt, 1000)
+        show('濁点の表し方が違っても同じ鍵になる', a.authKey === b.authKey)
+      } catch (e) {
+        show('暗号層がブラウザで動く', false, String(e))
+      }
+    </script>
+  </body>
+</html>

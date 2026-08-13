@@ -28,3 +28,9 @@ enabled = false
 # この値が本番で使われるとアクセストークンを誰でも偽造できる
 [vars]
 TOKEN_SECRET = "dev-only-secret-do-not-use-in-production"
+
+# 静的配信。パスに一致するファイルがあればそれを返し、無ければ Worker が処理する
+# ＝ /api/* は Worker、それ以外は public/ の中身
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
