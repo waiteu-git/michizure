@@ -143,7 +143,12 @@ async function handleBlob(request: Request, env: Env, roomId: string): Promise<R
       return Response.json({ error: 'blob_too_large' }, { status: 413 })
     }
   }
-  const res = await roomStub(env, roomId).fetch('https://do/blob', { method: request.method, body })
+  const res = await roomStub(env, roomId).fetch('https://do/blob', {
+    method: request.method,
+    body,
+    // 書いた本人へ中継し返さないための識別子。中身には関与しない
+    headers: { 'X-Client-Id': request.headers.get('X-Client-Id') ?? '' },
+  })
   return new Response(res.body, {
     status: res.status,
     headers: { 'Content-Type': 'application/json' },
@@ -174,11 +179,17 @@ async function handleWebSocket(request: Request, env: Env, roomId: string): Prom
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return Response.json({ error: 'websocket_upgrade_required' }, { status: 400 })
   }
-  const token = new URL(request.url).searchParams.get('token') ?? ''
+  const url = new URL(request.url)
+  const token = url.searchParams.get('token') ?? ''
   if (!(await verifyToken(token, roomId, env.TOKEN_SECRET, Date.now()))) {
     return Response.json({ error: 'unauthorized' }, { status: 401 })
   }
-  return roomStub(env, roomId).fetch('https://do/ws', { headers: request.headers })
+  // ⚠ DO へは URL を組み直して渡すので、**クエリは明示的に運ぶ**。
+  // 落とすと接続に client が付かず、書いた本人にも中継し返してしまう
+  const client = encodeURIComponent(url.searchParams.get('client') ?? '')
+  return roomStub(env, roomId).fetch(`https://do/ws?client=${client}`, {
+    headers: request.headers,
+  })
 }
 
 export default {

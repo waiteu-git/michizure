@@ -18,7 +18,7 @@ export class Room extends DurableObject {
     if (url.pathname === '/enter') return this.handleEnter(request)
     if (url.pathname === '/blob' && request.method === 'GET') return this.handleGetBlob()
     if (url.pathname === '/blob' && request.method === 'PUT') return this.handlePutBlob(request)
-    if (url.pathname === '/ws') return this.handleWebSocket()
+    if (url.pathname === '/ws') return this.handleWebSocket(request)
     if (url.pathname === '/delete') return this.handleDelete(request)
     return new Response('Not Found', { status: 404 })
   }
@@ -180,10 +180,14 @@ export class Room extends DurableObject {
       return Response.json({ error: 'invalid_blob' }, { status: 400 })
     }
     this.put('blob', blob)
+    // 🔴 PUT でも中継する。しないと「同じ部屋を開いている人に届かない」ため
+    // クライアントが WS でも書くことになり、**書き込み経路が増える**。
+    // 検査を全部の面に入れ忘れる形を自分で作らないための判断（設計 §8）
+    this.broadcast(blob, request.headers.get('X-Client-Id'))
     return Response.json({ ok: true })
   }
 
-  private handleWebSocket(): Response {
+  private handleWebSocket(request: Request): Response {
     const blob = this.get<Blob>('blob')
     if (blob === null) return new Response('not found', { status: 404 })
 
@@ -191,8 +195,31 @@ export class Room extends DurableObject {
     const [client, server] = Object.values(pair)
     // Hibernation API。server.accept() を使うと DO が常駐し duration 課金が続く
     this.ctx.acceptWebSocket(server)
+    // 誰の接続かを覚えておく。書いた本人へ中継し返さないために要る。
+    // ⚠ Hibernation で DO が退避しても残るよう、変数ではなく接続に括り付ける
+    const clientId = new URL(request.url).searchParams.get('client') ?? ''
+    server.serializeAttachment({ clientId })
     server.send(JSON.stringify({ type: 'init', blob }))
     return new Response(null, { status: 101, webSocket: client })
+  }
+
+  /**
+   * 更新を他の接続へ配る。**書いた本人には返さない。**
+   *
+   * このプロジェクトの前身で、送信者除外が効いているつもりで実際には
+   * 他端末の更新を握り潰していた不具合があった。除外の判定はここ1箇所に集約し、
+   * クライアント側に重複防止フラグを置いてはならない。
+   */
+  private broadcast(blob: Blob, exclude: WebSocket | string | null): void {
+    const payload = JSON.stringify({ type: 'update', blob })
+    for (const peer of this.ctx.getWebSockets()) {
+      if (peer === exclude) continue
+      if (typeof exclude === 'string' && exclude !== '') {
+        const att = peer.deserializeAttachment() as { clientId?: string } | null
+        if (att?.clientId === exclude) continue
+      }
+      peer.send(payload)
+    }
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -226,12 +253,7 @@ export class Room extends DurableObject {
       return
     }
     this.put('blob', msg.blob)
-
-    // 送信者を除外するのはここだけ。クライアント側に重複防止フラグを置いてはならない
-    const payload = JSON.stringify({ type: 'update', blob: msg.blob })
-    for (const peer of this.ctx.getWebSockets()) {
-      if (peer !== ws) peer.send(payload)
-    }
+    this.broadcast(msg.blob!, ws)
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {

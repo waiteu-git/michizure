@@ -78,11 +78,11 @@ export async function pull(s: Session): Promise<'adopted' | 'conflict' | 'unchan
 }
 
 /** サーバーへ送る。失敗しても投げない（旅先では失敗が普通なので、例外にしない） */
-export async function push(s: Session): Promise<SyncStatus> {
+export async function push(s: Session, clientId = ''): Promise<SyncStatus> {
   const local = read(s.roomId)
   if (!local || !local.dirty) return 'synced'
   try {
-    await saveState(s, local.state)
+    await saveState(s, local.state, clientId)
     write(s.roomId, { ...local, baseStamp: stampOf(local.state), dirty: false })
     return 'synced'
   } catch {
@@ -103,6 +103,18 @@ function stampOf(state: RoomState): string {
     h = Math.imul(h, 16777619)
   }
   return (h >>> 0).toString(36) + ':' + s.length
+}
+
+/**
+ * 外（他の端末）から届いた状態を取り込む。
+ * ⚠ **この端末に未送信の変更がある時は取り込まない**＝黙って上書きすると
+ * 入力が理由も分からず消える。呼び出し側で衝突として扱う
+ */
+export function applyRemote(roomId: string, remote: RoomState): 'adopted' | 'conflict' {
+  const local = read(roomId)
+  if (local?.dirty) return 'conflict'
+  write(roomId, { state: remote, baseStamp: stampOf(remote), dirty: false })
+  return 'adopted'
 }
 
 /** 衝突したときに利用者へ見せる材料 */

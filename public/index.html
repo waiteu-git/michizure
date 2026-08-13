@@ -94,6 +94,7 @@
       .chip { cursor: pointer; background: transparent; color: var(--fg); }
       .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
       #parts { display: flex; flex-wrap: wrap; gap: .1rem; margin-bottom: .3rem; }
+      .live { font-size: .78rem; margin: -1rem 0 1rem; }
     </style>
   </head>
   <body>
@@ -151,6 +152,7 @@
     <section id="room" hidden>
       <h1 id="roomName"></h1>
       <p class="sync synced" id="sync">保存済み</p>
+      <p class="muted live" id="live"></p>
       <div id="conflict" hidden></div>
 
       <h2>メンバー</h2>

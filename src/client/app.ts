@@ -9,7 +9,9 @@ import {
 } from './api.ts'
 import { remember, remembered, rememberedAll, forget } from './session-store.ts'
 import { balances, advanced, settle, parts, isDone } from './settle.ts'
+import { connectLive, disconnectLive, clientId } from './live.ts'
 import {
+  applyRemote,
   commitLocal,
   localState,
   isDirty,
@@ -144,7 +146,7 @@ async function openRemembered(roomId: string) {
     state = localState(roomId)
     renderRoom()
     renderSync(isDirty(roomId) ? 'pending' : 'synced')
-    if (isDirty(roomId)) void push(s).then(renderSync)
+    if (isDirty(roomId)) void push(s, clientId).then(renderSync)
   } catch {
     if (!cached) {
       toast('つながりません。合言葉で入り直してください')
@@ -179,7 +181,7 @@ async function showConflict(s: import('./api.ts').Session) {
     state = mine
     $('conflict').hidden = true
     renderRoom()
-    void push(s).then(renderSync)
+    void push(s, clientId).then(renderSync)
   }
   $('takeTheirs').onclick = () => {
     resolveTakeTheirs(s.roomId, theirs)
@@ -192,9 +194,34 @@ async function showConflict(s: import('./api.ts').Session) {
 
 // ---------- 部屋 ----------
 
+/** 同じ部屋を開いている端末からの変更を受け取る */
+function startLive() {
+  if (!session) return
+  const s = session
+  connectLive(s, {
+    onStatus: (connected) => {
+      $('live').textContent = connected ? '他の端末とつながっています' : ''
+    },
+    onUpdate: async (blob) => {
+      try {
+        const { decryptBlob } = await import('./api.ts')
+        const remote = await decryptBlob(s, blob)
+        // ⚠ 未送信の変更がある時は取り込まない。黙って上書きすると入力が消える
+        if (applyRemote(s.roomId, remote) === 'conflict') return void showConflict(s)
+        state = remote
+        renderRoom()
+        renderSync('synced')
+      } catch {
+        // 復号できない＝自分の鍵では読めないもの。触らない
+      }
+    },
+  })
+}
+
 function renderRoom() {
   if (!state) return
   $('roomName').textContent = state.name
+  startLive()
   renderMembers()
   renderBookings()
   renderSummary()
@@ -306,7 +333,7 @@ function persist() {
   if (!session || !state) return
   commitLocal(session.roomId, state)
   renderSync('pending')
-  void push(session).then(renderSync)
+  void push(session, clientId).then(renderSync)
 }
 
 function renderSync(status: SyncStatus) {
@@ -424,6 +451,7 @@ async function destroyRoom() {
   try {
     const { deleteRoom } = await import('./api.ts')
     await deleteRoom(session.roomId, pass)
+    disconnectLive()
     dropLocal(session.roomId)
     forget(session.roomId)
     session = null
@@ -443,7 +471,10 @@ document.addEventListener('click', (e) => {
   if (el.id === 'createBtn') void doCreate()
   if (el.id === 'joinBtn') void doJoin()
   if (el.id === 'toJoin') show('join')
-  if (el.id === 'toHome') renderHome()
+  if (el.id === 'toHome') {
+    disconnectLive()
+    renderHome()
+  }
   if (el.id === 'enterRoomBtn') renderRoom()
   if (el.id === 'addMemberBtn') addMember()
   if (el.id === 'saveBookingBtn') saveBooking()
@@ -499,7 +530,7 @@ document.addEventListener('change', (e) => {
 
 // 電波が戻ったら、溜まっている変更を自動で送る（利用者に再操作させない）
 addEventListener('online', () => {
-  if (session && isDirty(session.roomId)) void push(session).then(renderSync)
+  if (session && isDirty(session.roomId)) void push(session, clientId).then(renderSync)
 })
 
 // URL が /r/<roomId> なら、その部屋を開こうとする（合言葉は URL に入れない＝設計 §7.6.1 ②）

@@ -36,10 +36,11 @@ type Conn = {
   close(): void
 }
 
-async function connect(roomId: string, token: string): Promise<Conn> {
-  const res = await SELF.fetch(`https://example.com/api/rooms/${roomId}/ws?token=${token}`, {
-    headers: { Upgrade: 'websocket' },
-  })
+async function connect(roomId: string, token: string, clientId = ''): Promise<Conn> {
+  const res = await SELF.fetch(
+    `https://example.com/api/rooms/${roomId}/ws?token=${token}&client=${clientId}`,
+    { headers: { Upgrade: 'websocket' } },
+  )
   if (!res.webSocket) {
     throw new Error(`WebSocket upgrade に失敗: status=${res.status} body=${await res.text()}`)
   }
@@ -193,6 +194,59 @@ describe('WebSocket 中継', () => {
       state.getWebSockets().length,
     )
     expect(count).toBe(0)
+  })
+
+  // 🔴 PUT でも中継しないと、同じ部屋を開いている人に届かない。
+  // 届かないとクライアントが WS でも書くことになり、書き込み経路が増える
+  it('PUT の更新が、開いている他の接続へ届く', async () => {
+    const room = await createRoom()
+    const b = await connect(room.roomId, room.token, 'other-device')
+    expect((await b.next()).type).toBe('init')
+
+    const blob = { ...(await seal(room.encKeyBits, { name: 'PUTから' })), blobVersion: 1 }
+    await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${room.token}`,
+        'Content-Type': 'application/json',
+        'X-Client-Id': 'writer',
+      },
+      body: JSON.stringify(blob),
+    })
+
+    const msg = await b.next()
+    expect(msg.type).toBe('update')
+    expect(msg.blob.ciphertext).toBe(blob.ciphertext)
+    b.close()
+  })
+
+  // 前身で「除外が効いているつもりで実際には他端末の更新を握り潰していた」不具合があった。
+  // 経路が増えたので、こちらの経路でも除外が効くことを固定する
+  it('PUT した本人の接続には返さない', async () => {
+    const room = await createRoom()
+    const me = await connect(room.roomId, room.token, 'me')
+    const other = await connect(room.roomId, room.token, 'other')
+    expect((await me.next()).type).toBe('init')
+    expect((await other.next()).type).toBe('init')
+
+    const blob = { ...(await seal(room.encKeyBits, { name: '自分が書いた' })), blobVersion: 1 }
+    await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${room.token}`,
+        'Content-Type': 'application/json',
+        'X-Client-Id': 'me',
+      },
+      body: JSON.stringify(blob),
+    })
+
+    // 相手が受け取ったことで「中継は完了した」と確定させてから自分を見る。
+    // 単に待つだけでは、中継が遅いのか除外が効いたのかを区別できない
+    expect((await other.next()).type).toBe('update')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(me.received.map((m) => m.type)).toEqual(['init'])
+    me.close()
+    other.close()
   })
 
   it('トークンなしの接続を拒否する', async () => {

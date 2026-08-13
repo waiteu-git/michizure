@@ -92,15 +92,28 @@ export async function loadState(s: Session): Promise<RoomState> {
   return open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv)
 }
 
-export async function saveState(s: Session, state: RoomState): Promise<void> {
+export async function saveState(s: Session, state: RoomState, clientId = ''): Promise<void> {
   const blob = { ...(await seal(s.encKeyBits, state)), blobVersion: 1 }
   await json(
     await fetch(`/api/rooms/${s.roomId}/blob`, {
       method: 'PUT',
-      headers: { Authorization: `Bearer ${s.token}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${s.token}`,
+        'Content-Type': 'application/json',
+        // 書いた本人へ中継し返さないための識別子。中身には関与しない
+        'X-Client-Id': clientId,
+      },
       body: JSON.stringify(blob),
     }),
   )
+}
+
+/** 受け取った暗号文を復号する（WebSocket で届いたものを取り込むのに使う） */
+export async function decryptBlob(
+  s: Session,
+  blob: { ciphertext: string; iv: string },
+): Promise<RoomState> {
+  return open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv)
 }
 
 export async function deleteRoom(roomId: string, passphrase: string): Promise<void> {
