@@ -84,6 +84,11 @@
       }
       #toast.on { opacity: 1; }
       .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
+      .sync { font-size: .8rem; margin: -.4rem 0 1rem; color: var(--muted); }
+      .sync::before { content: "● "; }
+      .sync.synced::before { color: var(--recv); }
+      .sync.pending::before, .sync.offline::before { color: var(--pay); }
+      .sync.conflict { color: var(--pay); font-weight: 700; }
     </style>
   </head>
   <body>
@@ -140,6 +145,8 @@
 
     <section id="room" hidden>
       <h1 id="roomName"></h1>
+      <p class="sync synced" id="sync">保存済み</p>
+      <div id="conflict" hidden></div>
 
       <h2>メンバー</h2>
       <div id="members"></div>

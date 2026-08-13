@@ -8,8 +8,23 @@ import {
   type Session,
 } from './api.ts'
 import { remember, remembered, rememberedAll, forget } from './session-store.ts'
-import { generatePassphrase, customPassphraseTooWeak, estimateBits } from './passphrase.ts'
 import { balances, advanced, settle, parts, isDone } from './settle.ts'
+import {
+  commitLocal,
+  localState,
+  isDirty,
+  pull,
+  push,
+  dropLocal,
+  conflictSides,
+  resolveKeepMine,
+  resolveTakeTheirs,
+  type SyncStatus,
+} from './store.ts'
+
+// ⚠ 単語リスト（約7KB）は【部屋を作る時にしか要らない】ので、その時に取りに行く。
+// 最初の読み込みに含めると、入室しかしない人にも運ばせることになる
+const passphraseModule = () => import('./passphrase.ts')
 
 const $ = (id: string) => document.getElementById(id)!
 const esc = (s: unknown) =>
@@ -53,6 +68,7 @@ async function doCreate() {
   const name = ($('newName') as HTMLInputElement).value.trim()
   if (!name) return toast('旅行の名前を入れてください')
   const custom = ($('customPass') as HTMLInputElement).value.trim()
+  const { generatePassphrase, customPassphraseTooWeak, estimateBits } = await passphraseModule()
   if (custom && customPassphraseTooWeak(custom)) {
     return toast(`合言葉が弱すぎます（推定 ${estimateBits(custom)} ビット）`)
   }
@@ -65,6 +81,7 @@ async function doCreate() {
     session = { roomId: s.roomId, token: s.token, encKeyBits: s.encKeyBits }
     state = emptyState(name)
     remember(session, name)
+    commitLocal(s.roomId, state)
     ;($('shownPass') as HTMLElement).textContent = passphrase
     ;($('shownUrl') as HTMLElement).textContent = `${location.origin}/r/${s.roomId}`
     show('created')
@@ -85,6 +102,8 @@ async function doJoin() {
     session = await enterRoom(roomId, pass)
     state = await loadState(session)
     remember(session, state.name)
+    commitLocal(roomId, state)
+    renderSync('synced')
     renderRoom()
   } catch (e) {
     const msg = String(e instanceof Error ? e.message : e)
@@ -102,17 +121,68 @@ async function doJoin() {
   }
 }
 
+/** 端末の控えを先に見せ、通信はその後ろで行う（電波が無くても開ける） */
 async function openRemembered(roomId: string) {
   const s = remembered(roomId)
   if (!s) return toast('この端末には保存されていません')
   session = s
-  try {
-    state = await loadState(s)
+
+  const cached = localState(roomId)
+  if (cached) {
+    state = cached
     renderRoom()
+    renderSync(isDirty(roomId) ? 'pending' : 'synced')
+  }
+
+  try {
+    const result = await pull(s)
+    if (result === 'conflict') return showConflict(s)
+    state = localState(roomId)
+    renderRoom()
+    renderSync(isDirty(roomId) ? 'pending' : 'synced')
+    if (isDirty(roomId)) void push(s).then(renderSync)
   } catch {
-    toast('開けませんでした。合言葉で入り直してください')
-    ;($('joinRoom') as HTMLInputElement).value = roomId
-    show('join')
+    if (!cached) {
+      toast('つながりません。合言葉で入り直してください')
+      ;($('joinRoom') as HTMLInputElement).value = roomId
+      show('join')
+    } else {
+      renderSync(navigator.onLine ? 'pending' : 'offline')
+    }
+  }
+}
+
+/**
+ * 衝突＝自動でマージしない（設計の非スコープ）。**どちらを残すかは利用者が決める。**
+ * 黙って上書きすると、片方の入力が理由も分からず消える
+ */
+async function showConflict(s: import('./api.ts').Session) {
+  renderSync('conflict')
+  const { mine, theirs } = await conflictSides(s)
+  const count = (x: typeof mine) => `${x.members.length}人・記録${x.bookings.length}件`
+  $('conflict').innerHTML = `
+    <div class="warn">
+      <b>この端末の変更と、他の端末の変更が食い違っています。</b>
+      どちらを残すか選んでください。<b>選ばなかったほうは消えます。</b>
+    </div>
+    <div class="row"><span>この端末（${count(mine)}）</span>
+      <button id="keepMine">こちらを残す</button></div>
+    <div class="row"><span>他の端末（${count(theirs)}）</span>
+      <button class="ghost" id="takeTheirs">こちらを残す</button></div>`
+  $('conflict').hidden = false
+  $('keepMine').onclick = () => {
+    resolveKeepMine(s.roomId, mine)
+    state = mine
+    $('conflict').hidden = true
+    renderRoom()
+    void push(s).then(renderSync)
+  }
+  $('takeTheirs').onclick = () => {
+    resolveTakeTheirs(s.roomId, theirs)
+    state = theirs
+    $('conflict').hidden = true
+    renderRoom()
+    renderSync('synced')
   }
 }
 
@@ -189,13 +259,27 @@ function renderSummary() {
     : '<p class="ok">精算完了。支払い残はありません</p>'
 }
 
-async function persist() {
+/**
+ * 🔴 変更は**まず端末に確定させる**。通信は後ろで行う。
+ * 旅先で電波が切れても入力が消えないようにするための順序であり、逆にしてはいけない。
+ */
+function persist() {
   if (!session || !state) return
-  try {
-    await saveState(session, state)
-  } catch (e) {
-    toast(`保存できませんでした: ${e instanceof Error ? e.message : e}`)
+  commitLocal(session.roomId, state)
+  renderSync('pending')
+  void push(session).then(renderSync)
+}
+
+function renderSync(status: SyncStatus) {
+  const el = $('sync')
+  const label: Record<SyncStatus, string> = {
+    synced: '保存済み',
+    pending: '未同期（この端末には保存されています）',
+    offline: 'オフライン（この端末には保存されています）',
+    conflict: '他の端末の変更と食い違っています',
   }
+  el.textContent = label[status]
+  el.className = `sync ${status}`
 }
 
 function addMember() {
@@ -208,7 +292,7 @@ function addMember() {
   renderMembers()
   renderBookings()
   renderSummary()
-  void persist()
+  persist()
 }
 
 function addBooking() {
@@ -231,7 +315,7 @@ function addBooking() {
   ;($('description') as HTMLInputElement).value = ''
   renderBookings()
   renderSummary()
-  void persist()
+  persist()
 }
 
 // ---------- 配線 ----------
@@ -247,6 +331,7 @@ document.addEventListener('click', (e) => {
   if (el.id === 'addBookingBtn') addBooking()
   if (el.dataset.open) void openRemembered(el.dataset.open)
   if (el.dataset.forget) {
+    dropLocal(el.dataset.forget)
     forget(el.dataset.forget)
     renderHome()
     toast('この端末から消しました')
@@ -271,8 +356,13 @@ document.addEventListener('change', (e) => {
     else delete b.paid[el.dataset.member!]
     renderBookings()
     renderSummary()
-    void persist()
+    persist()
   }
+})
+
+// 電波が戻ったら、溜まっている変更を自動で送る（利用者に再操作させない）
+addEventListener('online', () => {
+  if (session && isDirty(session.roomId)) void push(session).then(renderSync)
 })
 
 // URL が /r/<roomId> なら、その部屋を開こうとする（合言葉は URL に入れない＝設計 §7.6.1 ②）
