@@ -89,6 +89,11 @@
       .sync.synced::before { color: var(--recv); }
       .sync.pending::before, .sync.offline::before { color: var(--pay); }
       .sync.conflict { color: var(--pay); font-weight: 700; }
+      button.small { padding: .25rem .6rem; font-size: .8rem; }
+      button.danger { border-color: var(--pay); color: var(--pay); }
+      .chip { cursor: pointer; background: transparent; color: var(--fg); }
+      .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      #parts { display: flex; flex-wrap: wrap; gap: .1rem; margin-bottom: .3rem; }
     </style>
   </head>
   <body>
@@ -157,22 +162,32 @@
 
       <h2>記録</h2>
       <div id="bookings"></div>
-      <label class="field"><span>種類</span>
-        <select id="category">
-          <option>航空券</option><option>宿泊</option><option>食費</option>
-          <option>交通費</option><option>アクティビティ</option><option>その他</option>
-        </select></label>
-      <label class="field"><span>内容</span><input id="description" placeholder="夕食" /></label>
-      <label class="field"><span>金額</span><input id="amount" type="number" inputmode="numeric" /></label>
-      <label class="field"><span>立て替えた人</span><select id="payer"></select></label>
-      <button id="addBookingBtn">記録する</button>
+
+      <div id="bookingForm">
+        <label class="field"><span>種類</span>
+          <select id="category">
+            <option>航空券</option><option>宿泊</option><option>食費</option>
+            <option>交通費</option><option>アクティビティ</option><option>その他</option>
+          </select></label>
+        <label class="field"><span>内容</span><input id="description" placeholder="夕食" /></label>
+        <label class="field"><span>金額</span><input id="amount" type="number" inputmode="numeric" /></label>
+        <label class="field"><span>立て替えた人</span><select id="payer"></select></label>
+        <label class="field"><span>誰で割るか</span></label>
+        <div id="parts"></div>
+        <p class="muted" id="partsInfo"></p>
+        <div class="actions">
+          <button id="saveBookingBtn">記録する</button>
+          <button class="ghost" id="cancelEditBtn" hidden>やめる</button>
+        </div>
+      </div>
 
       <h2>精算</h2>
       <div id="summary"></div>
       <div id="transfers"></div>
 
-      <div class="actions" style="margin-top:2rem">
+      <div class="actions" style="margin-top:2.5rem">
         <button class="ghost" id="toHome">入口に戻る</button>
+        <button class="ghost danger" id="destroyRoomBtn">この旅行を完全に消す</button>
       </div>
     </section>
 

@@ -33,6 +33,10 @@ const yen = (n: number) => Math.round(n).toLocaleString('ja-JP')
 
 let session: Session | null = null
 let state: RoomState | null = null
+/** 追加フォームで選択中の対象者。null = まだ触っていない＝全員 */
+let formParts: string[] | null = null
+/** 修正中の記録のID。null = 新規追加 */
+let editingId: string | null = null
 
 function toast(msg: string) {
   const t = $('toast')
@@ -203,7 +207,37 @@ function renderMembers() {
     state.members.map((m) => `<span class="chip on">${esc(m.name)}</span>`).join('') ||
     '<span class="muted">まだ誰もいません</span>'
   const sel = $('payer') as HTMLSelectElement
+  const keep = sel.value
   sel.innerHTML = state.members.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')
+  if (keep) sel.value = keep
+  renderFormParts()
+}
+
+/**
+ * 誰で割るかを選ぶ。**旅行では「この食事は3人だけ」が普通に起きる**ので、
+ * 常に全員で割ると金額が合わない。
+ */
+function renderFormParts() {
+  if (!state) return
+  const ids = state.members.map((m) => m.id)
+  if (formParts) formParts = formParts.filter((id) => ids.includes(id))
+  const chosen = formParts ?? ids
+  const all = chosen.length === ids.length
+  $('parts').innerHTML =
+    ids.length === 0
+      ? '<span class="muted">先にメンバーを追加してください</span>'
+      : `<button type="button" class="chip${all ? ' on' : ''}" data-part="*">全員</button>` +
+        state.members
+          .map(
+            (m) =>
+              `<button type="button" class="chip${chosen.includes(m.id) ? ' on' : ''}" data-part="${esc(m.id)}">${esc(m.name)}</button>`,
+          )
+          .join('')
+  const amount = Number(($('amount') as HTMLInputElement).value)
+  $('partsInfo').textContent =
+    chosen.length && Number.isFinite(amount) && amount > 0
+      ? `${chosen.length}人で割る → 1人 ${yen(amount / chosen.length)}円`
+      : `${chosen.length}人で割る`
 }
 
 function renderBookings() {
@@ -217,7 +251,8 @@ function renderBookings() {
           return `<div class="card${isDone(b, ids) ? ' done' : ''}">
         <div class="card-head"><b>${esc(b.category)}</b> ${esc(b.description)}
           <span class="amount">${yen(b.amount)}円</span></div>
-        <div class="muted">${esc(nameOf(b.payer))} が立替 ／ ${others.length + 1}人で割る</div>
+        <div class="muted">${esc(nameOf(b.payer))} が立替 ／ ${parts(b, ids).length}人で割る
+          （${parts(b, ids).map((id) => esc(nameOf(id))).join('・')}）</div>
         <div class="paid">${others
           .map(
             (id) =>
@@ -225,6 +260,10 @@ function renderBookings() {
                 ${b.paid?.[id] ? 'checked' : ''}> ${esc(nameOf(id))}</label>`,
           )
           .join('')}</div>
+        <div class="actions">
+          <button class="ghost small" data-edit="${esc(b.id)}">直す</button>
+          <button class="ghost small" data-del="${esc(b.id)}">消す</button>
+        </div>
       </div>`
         })
         .join('')
@@ -295,27 +334,106 @@ function addMember() {
   persist()
 }
 
-function addBooking() {
+function saveBooking() {
   if (!state) return
   const amount = Number(($('amount') as HTMLInputElement).value)
   const payer = ($('payer') as HTMLSelectElement).value
   if (!payer) return toast('先にメンバーを追加してください')
   if (!Number.isFinite(amount) || amount <= 0) return toast('金額を入れてください')
-  state.bookings.push({
-    // オフラインで採番すると連番は必ず衝突する（設計 §6）
-    id: crypto.randomUUID(),
+  const chosen = formParts ?? state.members.map((m) => m.id)
+  if (chosen.length === 0) return toast('割る相手を1人以上選んでください')
+
+  const fields = {
     category: ($('category') as HTMLSelectElement).value,
     description: ($('description') as HTMLInputElement).value.trim(),
     payer,
     amount,
-    participants: state.members.map((m) => m.id),
-    paid: {},
-  })
-  ;($('amount') as HTMLInputElement).value = ''
-  ;($('description') as HTMLInputElement).value = ''
+    participants: chosen,
+  }
+
+  if (editingId) {
+    const b = state.bookings.find((x) => x.id === editingId)
+    if (b) {
+      // ⚠ 支払い済みのチェックは残す。ただし対象から外れた人の分は消す
+      // （残すと「もう払った人」として精算から抜け落ちる）
+      Object.assign(b, fields)
+      for (const id of Object.keys(b.paid ?? {})) {
+        if (!chosen.includes(id)) delete b.paid[id]
+      }
+    }
+  } else {
+    state.bookings.push({
+      // オフラインで採番すると連番は必ず衝突する（設計 §6）
+      id: crypto.randomUUID(),
+      ...fields,
+      paid: {},
+    })
+  }
+  cancelEdit()
   renderBookings()
   renderSummary()
   persist()
+}
+
+function startEdit(id: string) {
+  if (!state) return
+  const b = state.bookings.find((x) => x.id === id)
+  if (!b) return
+  editingId = id
+  formParts = [...parts(b, state.members.map((m) => m.id))]
+  ;($('category') as HTMLSelectElement).value = b.category
+  ;($('description') as HTMLInputElement).value = b.description
+  ;($('amount') as HTMLInputElement).value = String(b.amount)
+  ;($('payer') as HTMLSelectElement).value = b.payer
+  $('saveBookingBtn').textContent = 'この内容に直す'
+  $('cancelEditBtn').hidden = false
+  renderFormParts()
+  $('bookingForm').scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function cancelEdit() {
+  editingId = null
+  formParts = null
+  ;($('description') as HTMLInputElement).value = ''
+  ;($('amount') as HTMLInputElement).value = ''
+  $('saveBookingBtn').textContent = '記録する'
+  $('cancelEditBtn').hidden = true
+  renderFormParts()
+}
+
+function deleteBooking(id: string) {
+  if (!state) return
+  const b = state.bookings.find((x) => x.id === id)
+  if (!b) return
+  // 消すのは戻せないので、何を消すのか見せてから聞く
+  if (!confirm(`「${b.description || b.category}／${yen(b.amount)}円」を消します。よろしいですか。`)) return
+  state.bookings = state.bookings.filter((x) => x.id !== id)
+  if (editingId === id) cancelEdit()
+  renderBookings()
+  renderSummary()
+  persist()
+}
+
+/** 部屋ごと消す。合言葉を保存していないので、必ず打ってもらう＝不可逆操作の関門になる */
+async function destroyRoom() {
+  if (!session || !state) return
+  const pass = prompt(
+    `「${state.name}」を完全に消します。**元に戻せません。**\n続けるなら合言葉を入力してください。`,
+  )
+  if (!pass) return
+  try {
+    const { deleteRoom } = await import('./api.ts')
+    await deleteRoom(session.roomId, pass)
+    dropLocal(session.roomId)
+    forget(session.roomId)
+    session = null
+    state = null
+    toast('消しました')
+    renderHome()
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e)
+    toast(msg.includes('invalid_key') ? '合言葉が違います' : `消せませんでした: ${msg}`)
+  }
 }
 
 // ---------- 配線 ----------
@@ -328,7 +446,22 @@ document.addEventListener('click', (e) => {
   if (el.id === 'toHome') renderHome()
   if (el.id === 'enterRoomBtn') renderRoom()
   if (el.id === 'addMemberBtn') addMember()
-  if (el.id === 'addBookingBtn') addBooking()
+  if (el.id === 'saveBookingBtn') saveBooking()
+  if (el.id === 'cancelEditBtn') cancelEdit()
+  if (el.id === 'destroyRoomBtn') void destroyRoom()
+  if (el.dataset.edit) startEdit(el.dataset.edit)
+  if (el.dataset.del) deleteBooking(el.dataset.del)
+  if (el.dataset.part) {
+    const ids = state?.members.map((m) => m.id) ?? []
+    if (el.dataset.part === '*') formParts = formParts?.length === ids.length ? [] : [...ids]
+    else {
+      const cur = formParts ?? [...ids]
+      formParts = cur.includes(el.dataset.part)
+        ? cur.filter((x) => x !== el.dataset.part)
+        : [...cur, el.dataset.part]
+    }
+    renderFormParts()
+  }
   if (el.dataset.open) void openRemembered(el.dataset.open)
   if (el.dataset.forget) {
     dropLocal(el.dataset.forget)
@@ -344,6 +477,10 @@ document.addEventListener('click', (e) => {
     void navigator.clipboard.writeText($('shownUrl').textContent ?? '')
     toast('リンクをコピーしました（合言葉は別に伝えてください）')
   }
+})
+
+document.addEventListener('input', (e) => {
+  if ((e.target as HTMLElement).id === 'amount') renderFormParts()
 })
 
 document.addEventListener('change', (e) => {
