@@ -109,6 +109,14 @@
         <input id="customPass" placeholder="自動生成" autocomplete="off" /></label>
       <button id="createBtn">作る</button>
 
+      <details style="margin-top:1.2rem">
+        <summary class="muted">前のアプリのデータを引き継ぐ</summary>
+        <p class="muted">前のアプリで「エクスポート」して保存した JSON ファイルを選んでください。
+          読み込んでも、前のアプリのデータはそのままです。</p>
+        <input type="file" id="importFile" accept="application/json,.json" />
+        <div id="importInfo"></div>
+      </details>
+
       <div id="remembered"></div>
 
       <h2>合言葉で入る</h2>

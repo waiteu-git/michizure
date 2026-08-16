@@ -27,6 +27,11 @@ import {
 // ⚠ 単語リスト（約7KB）は【部屋を作る時にしか要らない】ので、その時に取りに行く。
 // 最初の読み込みに含めると、入室しかしない人にも運ばせることになる
 const passphraseModule = () => import('./passphrase.ts')
+// 取り込みも、使う人だけが運べばよい
+const importModule = () => import('./import.ts')
+
+/** 取り込んだ状態を一時的に持つ。「作る」を押した時に部屋の中身になる */
+let pendingImport: RoomState | null = null
 
 const $ = (id: string) => document.getElementById(id)!
 const esc = (s: unknown) =>
@@ -83,9 +88,11 @@ async function doCreate() {
   $('createBtn').setAttribute('disabled', '')
   toast('鍵を作っています…')
   try {
-    const s = await createRoom(passphrase, emptyState(name))
+    const initial = pendingImport ? { ...pendingImport, name } : emptyState(name)
+    const s = await createRoom(passphrase, initial)
     session = { roomId: s.roomId, token: s.token, encKeyBits: s.encKeyBits }
-    state = emptyState(name)
+    state = initial
+    pendingImport = null
     remember(session, name)
     commitLocal(s.roomId, state)
     ;($('shownPass') as HTMLElement).textContent = passphrase
@@ -189,6 +196,32 @@ async function showConflict(s: import('./api.ts').Session) {
     $('conflict').hidden = true
     renderRoom()
     renderSync('synced')
+  }
+}
+
+/**
+ * 前のアプリから書き出したファイルを読み込む。
+ * ⚠ **前のアプリには触れない**＝利用者がエクスポートしたファイルだけを読む。
+ * ⚠ 読み込んだ時点では作らない。**何が入るかを見せてから**作らせる
+ */
+async function handleImportFile(file: File) {
+  // 利用者のファイル＝壊れている前提で読む。大きすぎるものは開かない
+  if (file.size > 5 * 1024 * 1024) return toast('ファイルが大きすぎます')
+  try {
+    const raw = JSON.parse(await file.text())
+    const { convertLegacy } = await importModule()
+    const name = ($('newName') as HTMLInputElement).value.trim() || '取り込んだ旅行'
+    const { state: imported, notes } = convertLegacy(raw, name)
+    pendingImport = imported
+    $('importInfo').innerHTML =
+      `<div class="warn"><b>${imported.members.length}人・記録${imported.bookings.length}件</b>を読み込みました。` +
+      `「作る」を押すと、この内容で新しい旅行ができます。` +
+      (notes.length ? `<br>${notes.map(esc).join('<br>')}` : '') +
+      `</div>`
+  } catch (e) {
+    pendingImport = null
+    $('importInfo').innerHTML = ''
+    toast(`読み込めませんでした: ${e instanceof Error ? e.message : e}`)
   }
 }
 
@@ -508,6 +541,11 @@ document.addEventListener('click', (e) => {
     void navigator.clipboard.writeText($('shownUrl').textContent ?? '')
     toast('リンクをコピーしました（合言葉は別に伝えてください）')
   }
+})
+
+document.addEventListener('change', (e) => {
+  const el = e.target as HTMLInputElement
+  if (el.id === 'importFile' && el.files?.[0]) void handleImportFile(el.files[0])
 })
 
 document.addEventListener('input', (e) => {
