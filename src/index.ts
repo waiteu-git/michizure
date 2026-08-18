@@ -16,6 +16,7 @@ export { Room } from './room.ts'
 export interface Env {
   ROOM: DurableObjectNamespace
   TOKEN_SECRET: string
+  ASSETS: Fetcher
 }
 
 function roomStub(env: Env, roomId: string) {
@@ -192,8 +193,22 @@ async function handleWebSocket(request: Request, env: Env, roomId: string): Prom
   })
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+/**
+ * 検索結果に出さない。
+ *
+ * ⚠ 面は3つある（robots.txt / meta タグ / このヘッダ）。**robots.txt はお願いでしかなく**、
+ * meta タグは HTML にしか効かない。ヘッダは API の応答にも効く。
+ * グレーゾーン解消制度の事前相談中は「非公開・宣伝なし」が条件なので、
+ * 検索結果に出ることは条件そのものを壊す。
+ */
+function noIndex(res: Response): Response {
+  const out = new Response(res.body, res)
+  out.headers.set('X-Robots-Tag', 'noindex, nofollow')
+  return out
+}
+
+async function route(request: Request, env: Env): Promise<Response> {
+  {
     const url = new URL(request.url)
     if (url.pathname === '/api/health') return Response.json({ ok: true })
     if (url.pathname === '/api/rooms' && request.method === 'POST') {
@@ -217,6 +232,19 @@ export default {
       return handleBlob(request, env, blobMatch[1])
     }
 
+    // 🔴 /r/<部屋ID> は【利用者が共有する URL】。ここで 404 を返すと、
+    // 受け取った人がリンクを開いても何も出ない。
+    // アセットに一致しないパスは Worker へ来るので、明示的に画面を返す
+    if (/^\/r\/[0-9A-Z]{16}$/.test(url.pathname)) {
+      return env.ASSETS.fetch(new Request(new URL('/', request.url), request))
+    }
+
     return new Response('Not Found', { status: 404 })
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    return noIndex(await route(request, env))
   },
 } satisfies ExportedHandler<Env>

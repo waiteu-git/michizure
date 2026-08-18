@@ -33,4 +33,7 @@ TOKEN_SECRET = "dev-only-secret-do-not-use-in-production"
 # ＝ /api/* は Worker、それ以外は public/ の中身
 [assets]
 directory = "./public"
-not_found_handling = "single-page-application"
+# ⚠ Worker がある場合、パスに一致するアセットが無ければ【Worker が呼ばれる】。
+# not_found_handling は Worker 側へ来る前には効かないので、
+# /r/<部屋ID> は Worker が明示的に index.html を返す必要がある（binding を使う）
+binding = "ASSETS"
