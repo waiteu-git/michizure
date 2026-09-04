@@ -128,3 +128,19 @@ export type ServerMessage =
   | { type: 'init'; blob: Blob | null }
   | { type: 'update'; blob: Blob }
   | { type: 'error'; code: string }
+
+/**
+ * ネイティブのシェルから API を叩く時に許可するオリジン。
+ *
+ * 🔴 **全開（`*`）にしてはいけない。** 誰のページからでも部屋を叩けるようになる。
+ * ここは「この一覧に一致した時だけ、そのオリジンをそのまま返す」方式で使う。
+ * ⚠ 反射（要求された Origin をそのまま返す）を無条件でやると全開と同じになる。
+ *
+ * Capacitor の画面の出所＝iOS が `capacitor://localhost`、Android が `http://localhost`。
+ */
+export const ALLOWED_SHELL_ORIGINS = ['capacitor://localhost', 'http://localhost'] as const
+
+export function allowedOrigin(origin: string | null): string | null {
+  if (!origin) return null
+  return (ALLOWED_SHELL_ORIGINS as readonly string[]).includes(origin) ? origin : null
+}

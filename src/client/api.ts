@@ -1,6 +1,7 @@
 import { deriveKeys, toBase64 } from '../keys.ts'
 import { seal, open } from '../box.ts'
 import { KDF_VERSION } from '../types.ts'
+import { getApiBase } from './config.ts'
 import { PBKDF2_ITERATIONS } from '../keys.ts'
 
 export type RoomState = {
@@ -41,7 +42,7 @@ export async function createRoom(
   const salt = generateSaltB64()
   const { authKey, encKeyBits } = await deriveKeys(passphrase, salt, PBKDF2_ITERATIONS)
   const blob = { ...(await seal(encKeyBits, state)), blobVersion: 1 }
-  const res = await fetch('/api/rooms', {
+  const res = await fetch(`${getApiBase()}/api/rooms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -67,7 +68,7 @@ function generateSaltB64(): string {
  */
 export async function enterRoom(roomId: string, passphrase: string): Promise<Session> {
   const meta = await json<{ salt: string; iterations: number; kdfVersion: number }>(
-    await fetch(`/api/rooms/${roomId}/salt`),
+    await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`),
   )
   const { authKey, encKeyBits } = await deriveKeys(
     passphrase,
@@ -76,7 +77,7 @@ export async function enterRoom(roomId: string, passphrase: string): Promise<Ses
     meta.kdfVersion,
   )
   const { token } = await json<{ token: string }>(
-    await fetch(`/api/rooms/${roomId}/enter`, {
+    await fetch(`${getApiBase()}/api/rooms/${roomId}/enter`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ authKey }),
@@ -87,7 +88,7 @@ export async function enterRoom(roomId: string, passphrase: string): Promise<Ses
 
 export async function loadState(s: Session): Promise<RoomState> {
   const blob = await json<{ ciphertext: string; iv: string }>(
-    await fetch(`/api/rooms/${s.roomId}/blob`, { headers: { Authorization: `Bearer ${s.token}` } }),
+    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, { headers: { Authorization: `Bearer ${s.token}` } }),
   )
   return open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv)
 }
@@ -95,7 +96,7 @@ export async function loadState(s: Session): Promise<RoomState> {
 export async function saveState(s: Session, state: RoomState, clientId = ''): Promise<void> {
   const blob = { ...(await seal(s.encKeyBits, state)), blobVersion: 1 }
   await json(
-    await fetch(`/api/rooms/${s.roomId}/blob`, {
+    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${s.token}`,
@@ -118,11 +119,11 @@ export async function decryptBlob(
 
 export async function deleteRoom(roomId: string, passphrase: string): Promise<void> {
   const meta = await json<{ salt: string; iterations: number; kdfVersion: number }>(
-    await fetch(`/api/rooms/${roomId}/salt`),
+    await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`),
   )
   const { authKey } = await deriveKeys(passphrase, meta.salt, meta.iterations, meta.kdfVersion)
   await json(
-    await fetch(`/api/rooms/${roomId}`, {
+    await fetch(`${getApiBase()}/api/rooms/${roomId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ authKey }),

@@ -8,6 +8,7 @@ import {
   ciphertextBytes,
   iterationsInvalid,
   kdfVersionInvalid,
+  allowedOrigin,
   type Blob,
 } from './types.ts'
 
@@ -207,6 +208,37 @@ function noIndex(res: Response): Response {
   return out
 }
 
+/**
+ * ネイティブのシェルは別オリジンになるので、API に CORS が要る。
+ *
+ * 🔴 **許可は一覧に一致した時だけ。** 要求された Origin を無条件に返す（反射する）と
+ * 全開と同じで、誰のページからでも部屋を叩けるようになる。
+ * ⚠ Cookie は使っていない（認証は Authorization ヘッダ）ので credentials は許可しない。
+ */
+function withCors(res: Response, origin: string | null): Response {
+  const allowed = allowedOrigin(origin)
+  if (!allowed) return res
+  const out = new Response(res.body, res)
+  out.headers.set('Access-Control-Allow-Origin', allowed)
+  out.headers.set('Vary', 'Origin')
+  return out
+}
+
+function preflight(origin: string | null): Response | null {
+  const allowed = allowedOrigin(origin)
+  if (!allowed) return null
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': allowed,
+      'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Client-Id',
+      'Access-Control-Max-Age': '86400',
+      Vary: 'Origin',
+    },
+  })
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   {
     const url = new URL(request.url)
@@ -245,6 +277,11 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return noIndex(await route(request, env))
+    const origin = request.headers.get('Origin')
+    if (request.method === 'OPTIONS') {
+      const pre = preflight(origin)
+      if (pre) return pre
+    }
+    return withCors(noIndex(await route(request, env)), origin)
   },
 } satisfies ExportedHandler<Env>

@@ -10,6 +10,7 @@ import {
 import { remember, remembered, rememberedAll, forget } from './session-store.ts'
 import { balances, advanced, settle, parts, isDone } from './settle.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
+import { shareOrigin, initOrigins } from './origins.ts'
 import {
   applyRemote,
   commitLocal,
@@ -32,6 +33,8 @@ const importModule = () => import('./import.ts')
 
 /** 取り込んだ状態を一時的に持つ。「作る」を押した時に部屋の中身になる */
 let pendingImport: RoomState | null = null
+
+initOrigins()
 
 const $ = (id: string) => document.getElementById(id)!
 const esc = (s: unknown) =>
@@ -96,7 +99,7 @@ async function doCreate() {
     remember(session, name)
     commitLocal(s.roomId, state)
     ;($('shownPass') as HTMLElement).textContent = passphrase
-    ;($('shownUrl') as HTMLElement).textContent = `${location.origin}/r/${s.roomId}`
+    ;($('shownUrl') as HTMLElement).textContent = `${shareOrigin()}/r/${s.roomId}`
     show('created')
   } catch (e) {
     toast(`作成に失敗しました: ${e instanceof Error ? e.message : e}`)

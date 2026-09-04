@@ -1,4 +1,5 @@
 import type { Session } from './api.ts'
+import { wsOrigin } from './origins.ts'
 
 /**
  * 同じ部屋を開いている端末へ、変更を即座に届ける。
@@ -46,8 +47,7 @@ export function disconnectLive(): void {
 
 function open(s: Session, h: Handlers): void {
   if (stopped) return
-  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-  const url = `${scheme}://${location.host}/api/rooms/${s.roomId}/ws?token=${encodeURIComponent(s.token)}&client=${clientId}`
+  const url = `${wsOrigin()}/api/rooms/${s.roomId}/ws?token=${encodeURIComponent(s.token)}&client=${clientId}`
   let ws: WebSocket
   try {
     ws = new WebSocket(url)
