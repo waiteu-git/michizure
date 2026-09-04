@@ -63,7 +63,13 @@ for (const file of globSync('src/**/*.ts', { cwd: root })) {
     }
   }
   // 全ヘッダを展開するイディオム。cf-connecting-ip がログに出る
-  if (/(new map\(|object\.fromentries\(|\.\.\.\s*\w*\.?headers)/.test(source)) {
+  // ⚠ headers の条件を選択肢の【外】に置くこと。中へ移すと new Map( 全般に掛かり、
+  // ごく普通の Map までが落ちる（実際に 8171ea3 でそうなり、settle.ts が誤検知された）。
+  // 誤検知するラチェットは、無いより悪い（誰かが必ず外す）
+  const spreadsHeaders =
+    /(new map\(|object\.fromentries\()\s*[\w.]*headers/.test(source) ||
+    /\.\.\.\s*[\w.]*headers/.test(source)
+  if (spreadsHeaders) {
     failures.push(`${file} が全ヘッダを展開している。IP を含むヘッダがログに出る`)
   }
   // request.cf は IP ではないが、国・市・ASN 等の位置情報を含む
