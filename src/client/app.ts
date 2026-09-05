@@ -189,28 +189,46 @@ async function openRemembered(roomId: string) {
  * 衝突＝自動でマージしない（設計の非スコープ）。**どちらを残すかは利用者が決める。**
  * 黙って上書きすると、片方の入力が理由も分からず消える
  */
+/**
+ * 🔴 **ボタンを押した時点の中身で決める。表示した時点のものを握らない。**
+ *
+ * 以前はパネルを描いた瞬間の状態をクロージャに閉じ込めていた。パネルは押されるまで
+ * 消えず、その間も入力できるので、**押した瞬間にその後の入力が丸ごと消えた**
+ * （2026-09-05、実際に画面で踏んだ。記録4件が消える状態だった）。
+ * 表示している件数も止まったままで、利用者は何を捨てるのか判断できなかった。
+ */
 async function showConflict(s: import('./api.ts').Session) {
   renderSync('conflict')
-  const { mine, theirs } = await conflictSides(s)
-  const count = (x: typeof mine) => `${x.members.length}人・記録${x.bookings.length}件`
+  const count = (x: RoomState) => `${x.members.length}人・記録${x.bookings.length}件`
+  const sides = await conflictSides(s)
   $('conflict').innerHTML = `
     <div class="warn">
       <b>この端末の変更と、他の端末の変更が食い違っています。</b>
       どちらを残すか選んでください。<b>選ばなかったほうは消えます。</b>
     </div>
-    <div class="row"><span>この端末（${count(mine)}）</span>
+    <div class="row"><span>この端末（${count(sides.mine)}）</span>
       <button id="keepMine">こちらを残す</button></div>
-    <div class="row"><span>他の端末（${count(theirs)}）</span>
+    <div class="row"><span>他の端末（${count(sides.theirs)}）</span>
       <button class="ghost" id="takeTheirs">こちらを残す</button></div>`
   $('conflict').hidden = false
   $('keepMine').onclick = () => {
+    // 押した時点のローカル＝パネルを見ている間に足した記録も残る
+    const mine = localState(s.roomId)
+    if (!mine) return
     resolveKeepMine(s.roomId, mine)
     state = mine
     $('conflict').hidden = true
     renderRoom()
     void push(s, clientId).then(renderSync)
   }
-  $('takeTheirs').onclick = () => {
+  $('takeTheirs').onclick = async () => {
+    // 押した時点のサーバー側を取り直す。表示していた版はもう古いかもしれない
+    let theirs: RoomState
+    try {
+      theirs = (await conflictSides(s)).theirs
+    } catch {
+      return toast('つながりません。もう一度試してください')
+    }
     resolveTakeTheirs(s.roomId, theirs)
     state = theirs
     $('conflict').hidden = true
@@ -260,7 +278,11 @@ function startLive() {
         const { decryptBlob } = await import('./api.ts')
         const remote = await decryptBlob(s, blob)
         // ⚠ 未送信の変更がある時は取り込まない。黙って上書きすると入力が消える
-        if (applyRemote(s.roomId, remote) === 'conflict') return void showConflict(s)
+        const result = applyRemote(s.roomId, remote)
+        if (result === 'conflict') return void showConflict(s)
+        // 'ahead' ＝相手は動いていない。取り込むものは無いが、ローカルの変更も捨てない。
+        // ここで state を remote に差し替えると、**入力したばかりの記録が画面から消える**
+        if (result === 'ahead') return void push(s, clientId).then(renderSync)
         state = remote
         renderRoom()
         renderSync('synced')

@@ -110,11 +110,31 @@ function stampOf(state: RoomState): string {
  * ⚠ **この端末に未送信の変更がある時は取り込まない**＝黙って上書きすると
  * 入力が理由も分からず消える。呼び出し側で衝突として扱う
  */
-export function applyRemote(roomId: string, remote: RoomState): 'adopted' | 'conflict' {
+export function applyRemote(roomId: string, remote: RoomState): 'adopted' | 'ahead' | 'conflict' {
   const local = read(roomId)
-  if (local?.dirty) return 'conflict'
-  write(roomId, { state: remote, baseStamp: stampOf(remote), dirty: false })
-  return 'adopted'
+  const stamp = stampOf(remote)
+  if (!local || !local.dirty) {
+    write(roomId, { state: remote, baseStamp: stamp, dirty: false })
+    return 'adopted'
+  }
+
+  // 🔴 ここから先は「この端末に未送信の変更がある」状態。**それだけでは衝突ではない。**
+  // 以前はここで即 'conflict' を返していたため、**自分が送ったものが返ってきただけで
+  // 衝突パネルが出た**（部屋を作った直後に必ず起きる）。`pull()` は同じ判定を
+  // 正しく持っていたのに、WebSocket 経路にだけ無かった＝**効くべき面を数え損ねていた**。
+  // 2026-09-05、実際に画面を触って発見。
+
+  // ① 中身が同じ＝自分の push が中継されて戻ってきた。送信済みとして扱う
+  if (stamp === stampOf(local.state)) {
+    write(roomId, { state: local.state, baseStamp: stamp, dirty: false })
+    return 'adopted'
+  }
+  // ② 相手はこちらが編集を始めた版から動いていない＝こちらが先行しているだけ。
+  //    取り込むものは無いが、ローカルの変更も捨てない
+  if (local.baseStamp !== null && stamp === local.baseStamp) return 'ahead'
+
+  // ③ 双方が別々に動いた＝本当の衝突。利用者に選ばせる
+  return 'conflict'
 }
 
 /** 衝突したときに利用者へ見せる材料 */
