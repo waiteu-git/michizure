@@ -72,6 +72,28 @@
       }
       .pay { color: var(--pay); font-weight: 700; }
       .recv, .ok { color: var(--recv); font-weight: 700; }
+
+      /* --- 半券（切符）------------------------------------------------
+         ⚠ 裂くのは演出だが、意味は演出でない＝「リンクと合言葉は別の物」を
+         手つきで教える。ボタンの経路は裂かなくても常に使える（必須） */
+      .ticket { border: 1px solid var(--line); border-radius: 10px; margin: .8rem 0 .4rem;
+        overflow: hidden; touch-action: pan-y; }
+      .stub { padding: .8rem .9rem; transition: transform .35s ease, opacity .35s ease; }
+      .stub-label { display: block; font-size: .7rem; letter-spacing: .2em; color: var(--muted);
+        margin-bottom: .3rem; }
+      .stub .passbox { margin: .2rem 0 .6rem; }
+      .stub #shownUrl { word-break: break-all; margin: .1rem 0 .6rem; }
+      /* ミシン目。破線＋左右の切り欠きで「ここで切れる」と分かる形にする */
+      .perf { position: relative; height: 0; border-top: 2px dashed var(--line); }
+      .perf::before, .perf::after { content: ""; position: absolute; top: -7px; width: 12px; height: 12px;
+        border-radius: 50%; background: var(--bg); border: 1px solid var(--line); }
+      .perf::before { left: -7px; } .perf::after { right: -7px; }
+      .ticket.torn #stubUrl { transform: translateX(-10px) rotate(-.5deg); }
+      .ticket.torn #stubPass { transform: translateX(10px) rotate(.5deg); }
+      .ticket.torn .perf { border-top-style: solid; border-top-color: transparent; }
+      /* 声で伝える＝読み上げる人のために大きくする */
+      .passbox.say { font-size: 2rem; line-height: 1.5; letter-spacing: .04em; }
+      @media (prefers-reduced-motion: reduce) { .stub { transition: none; } }
       .passbox {
         border: 2px solid var(--accent); border-radius: 10px; padding: 1rem;
         font-size: 1.15rem; font-weight: 700; letter-spacing: .02em; word-break: break-all;
@@ -129,13 +151,27 @@
 
     <section id="created" hidden>
       <h1>できました</h1>
-      <p>この合言葉が、部屋を開ける唯一の鍵です。</p>
-      <div class="passbox" id="shownPass"></div>
-      <div class="actions">
-        <button id="copyPass">合言葉をコピー</button>
-        <button class="ghost" id="copyUrl">リンクをコピー</button>
+
+      <!--
+        🔴 一枚の切符。ミシン目の左右（上下）が【別々に渡すもの】であることを、
+        注意書きでなく形で示す。リンクと合言葉が1枚に揃った状態を作らないため、
+        右半分に QR を置いてはいけない（置いた瞬間に裂く意味が消える）。
+      -->
+      <div class="ticket" id="ticket">
+        <div class="stub" id="stubUrl">
+          <span class="stub-label">リンク</span>
+          <p class="muted" id="shownUrl"></p>
+          <button class="ghost small" id="copyUrl">リンクを送る</button>
+        </div>
+        <div class="perf" id="perf" role="separator" aria-label="切り取り線"></div>
+        <div class="stub" id="stubPass">
+          <span class="stub-label">合言葉</span>
+          <div class="passbox" id="shownPass"></div>
+          <button id="copyPass">合言葉を送る</button>
+          <button class="link" id="sayPass">声で伝える</button>
+        </div>
       </div>
-      <p class="muted" id="shownUrl"></p>
+      <p class="muted" id="tearHint">切り取り線を横になぞると、二つに分かれます。</p>
 
       <div class="warn">
         <b>合言葉を無くすと、中のデータは誰にも戻せません。</b>
@@ -143,7 +179,7 @@
       </div>
       <p class="muted">
         リンクと合言葉は<b>別々に渡す</b>ことをおすすめします。まとめて送ると、
-        その1通が漏れただけで部屋が開かれます。
+        その1通が漏れただけで部屋が開かれます。合言葉は声で伝えるのが一番安全です。
       </p>
       <button id="enterRoomBtn">旅行を開く</button>
     </section>

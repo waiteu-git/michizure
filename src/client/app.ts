@@ -614,13 +614,52 @@ document.addEventListener('click', (e) => {
   }
   if (el.id === 'copyPass') {
     void navigator.clipboard.writeText($('shownPass').textContent ?? '')
-    toast('合言葉をコピーしました')
+    toast('合言葉をコピーしました（リンクとは別の経路で送ってください）')
   }
   if (el.id === 'copyUrl') {
     void navigator.clipboard.writeText($('shownUrl').textContent ?? '')
     toast('リンクをコピーしました（合言葉は別に伝えてください）')
   }
+  if (el.id === 'sayPass') {
+    // 読み上げる人のために大きくするだけ。合言葉を音声で送るわけではない
+    const box = $('shownPass')
+    const on = box.classList.toggle('say')
+    el.textContent = on ? '元の大きさに戻す' : '声で伝える'
+  }
 })
+
+/**
+ * 切符を裂く。ミシン目の上を横になぞると二つに分かれる。
+ *
+ * ⚠ **これは近道ではなく、意味の説明である。** 裂かなくてもボタンは全部使えるし、
+ * 裂いても何かが起きるわけではない。伝えたいのは「リンクと合言葉は別の物で、
+ * 別々に渡す」という一点で、注意書きより手の方がよく覚える。
+ *
+ * ⚠ 縦スクロールを殺さないこと（CSS の touch-action: pan-y と対）。
+ * 横に一定量動いた時だけ成立させ、縦に動いたら諦める。
+ */
+function setupTear() {
+  const perf = $('perf')
+  const ticket = $('ticket')
+  let x0: number | null = null
+  let y0 = 0
+  perf.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX
+    y0 = e.clientY
+  })
+  perf.addEventListener('pointermove', (e) => {
+    if (x0 === null || ticket.classList.contains('torn')) return
+    if (Math.abs(e.clientY - y0) > 24) return void (x0 = null) // 縦の動き＝スクロール
+    if (Math.abs(e.clientX - x0) < 48) return
+    x0 = null
+    ticket.classList.add('torn')
+    $('tearHint').textContent = '別々の相手に、別々の経路で渡してください。'
+  })
+  perf.addEventListener('pointerup', () => (x0 = null))
+  perf.addEventListener('pointercancel', () => (x0 = null))
+}
+
+setupTear()
 
 document.addEventListener('change', (e) => {
   const el = e.target as HTMLInputElement
