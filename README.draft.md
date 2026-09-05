@@ -6,7 +6,7 @@
 >
 > **Still required before this replaces `README.md` or goes public:**
 > 1. **Fill the Demo placeholders** (video link + 1–2 screenshots) — the section ships blank otherwise.
-> 2. **Re-measure every number.** Measured 2026-09-05 with `gzip -9` after `npm run build:client`.
+> 2. **Re-measure every number.** They have already moved three times (9,441 → 10,864 → 11,402 → 11,493).
 > 3. **Pre-publication scrub audit.**
 > 4. ⚠ Making the repository public is a **human-only** action and is not implied by any of the above.
 >
@@ -59,7 +59,7 @@ So this is not a better spreadsheet. It is a **narrower tool that gives up diffe
 | Accounts, sign-up, password reset | A room is a URL plus a passphrase. Nothing to create, nothing to lose but the passphrase |
 | The server being able to read your data | It is also **unable to help you recover it**. A lost passphrase is unrecoverable |
 | Reading IP addresses in our own code | Abuse has to be throttled at the platform layer instead of in code. **This does not mean no IP is recorded anywhere** — see below |
-| A framework | **11,402 bytes gzipped** before the app is usable, and it keeps working with no network |
+| A framework | **11,493 bytes gzipped** before the app is usable, and it keeps working with no network |
 | Automatic merge of conflicting edits | Conflicts are **shown to you**, never silently resolved |
 
 ## What the server actually holds
@@ -145,17 +145,17 @@ signal must decide what a paying user sees when RevenueCat cannot be reached.
 
 ## Measured numbers
 
-Measured 2026-09-05 with `gzip -9`, after `npm run build:client`.
+Measured with `gzip -9` after `npm run build:client`. **Every row carries its own measurement date** — the first-load figure moved twice on 2026-09-05 and again on 2026-09-06, each time because unrelated code changed. A number without a date in this table is a bug.
 
 | | |
 |---|---|
-| **Before the app is usable** | **11,402 B** — HTML 3,416 + app 6,308 + two shared chunks (908 + 770) |
-| Fetched only when creating a room | 4,600 B (word list + passphrase generation) |
-| Fetched only when importing old data | 1,021 B |
-| Service worker (does not block first paint) | 955 B |
-| Every asset the app can ever fetch | 18,171 B |
+| **Before the app is usable** (2026-09-06) | **11,493 B** — HTML 3,416 + app 6,399 + two shared chunks (908 + 770) |
+| Fetched only when creating a room (2026-09-06) | 4,600 B (word list + passphrase generation) |
+| Fetched only when importing old data (2026-09-06) | 1,021 B |
+| Service worker (does not block first paint, 2026-09-06) | 956 B |
+| Every asset the app can ever fetch (2026-09-06) | 18,263 B |
 | Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests | **133** |
+| Tests (run 2026-09-06) | **137** |
 | Room auto-deletion | 365 days after last access |
 | Ciphertext ceiling enforced by the server | 256 KiB |
 
@@ -175,7 +175,7 @@ npm run dev      # builds the client bundle, then starts wrangler dev
 that point — you can stop the server and reload, and it still works.
 
 ```bash
-npm test         # 133 tests; the pretest step also checks the privacy config and the word list
+npm test         # 137 tests; the pretest step also checks the privacy config and the word list
 npm run typecheck
 npm run build:wordlist   # regenerates the word list and its bundled copy from one source pass
 ```
