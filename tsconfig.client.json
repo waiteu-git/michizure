@@ -8,5 +8,17 @@
     "lib": ["es2022", "DOM"],
     "types": []
   },
-  "include": ["src/client/**/*.ts", "src/keys.ts", "src/box.ts", "src/types.ts"]
+  // 🔴 **exclude を打ち消すこと。** `extends` は親の exclude も継承するので、
+  // 親の "src/client/**/*.ts" がここでも効き、**include したファイルが全部除外される**。
+  // 2026-09-05 の実測で発覚＝この設定はそれまで src/client/ を1つも検査しておらず、
+  // わざと入れた型エラー（`const x: number = "文字列"`）が素通りした。
+  // ⚠ 「検査を分けた」と「検査が効いている」は別。分けた直後に対照で確かめること。
+  "exclude": [],
+  "include": [
+    "src/client/**/*.ts",
+    "src/keys.ts",
+    "src/box.ts",
+    "src/types.ts",
+    "test/local-store.test.ts"
+  ]
 }

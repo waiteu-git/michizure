@@ -13,6 +13,9 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"],
-  // クライアントは DOM の型が要るので tsconfig.client.json で別に検査する
-  "exclude": ["src/client/**/*.ts"]
+  // クライアントは DOM の型が要るので tsconfig.client.json で別に検査する。
+  // ⚠ test/ からクライアントのモジュールを import すると、ここへ引き込まれて
+  // DOM の型が無いまま検査される。**DOM を使うモジュールを触るテストは
+  // 個別に除外して、client 側の include へ足す**（DOM をここへ足してはいけない）。
+  "exclude": ["src/client/**/*.ts", "test/local-store.test.ts"]
 }
