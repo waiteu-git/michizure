@@ -1,15 +1,25 @@
 > # ⚠ DRAFT — not for publication
-> Submission-facing README draft. Before it replaces `README.md` or becomes public it **must** pass:
-> **(1)** BH's repo-proof audit (3 lenses + refutation) — every claim traced to code or a measurement;
-> **(2)** copy-collaborative — wording chosen with the user from options, not applied unilaterally.
+> Submission-facing README draft.
 >
-> **Numbers measured 2026-09-05** (`gzip -9`), except the KDF timing (2026-08-14). Re-measure before publishing.
-> RevenueCat is **not integrated** — see the marked section.
+> **Cleared (2026-09-05):**
+> ✅ Repo-proof audit — BH checked every claim against code; sizes independently recomputed from the
+> committed `public/` artifacts and matched exactly (3,416 + 6,018 + 1,430 = 10,864 B). No false claims.
+> ✅ Copy — tagline and the naming of competitors decided with the user.
 >
-> 🔴 **Correction carried in this draft:** the "9.3KB / 9,441 B initial load" figure quoted so far is **wrong**.
-> It counted `index.html + app.js` and assumed all four esbuild chunks were lazy. One of them
-> (`chunk-IWUKCSCV.js`, the shared crypto/state core, 1,430 B) is a **static** import and loads on first paint.
-> The correct first-load figure is **10,864 B**. Anywhere the old number was used must be updated.
+> **Still required before this replaces `README.md` or goes public:**
+> 1. **Fill the Demo placeholders** (video link + 1–2 screenshots) — the section ships blank otherwise.
+> 2. **Re-measure every number.** Measured 2026-09-05 with `gzip -9`, except the KDF timing (2026-08-14).
+> 3. **Pre-publication scrub audit.**
+> 4. ⚠ Making the repository public is a **human-only** action and is not implied by any of the above.
+>
+> RevenueCat is **not integrated** — see the marked section. Keep that marking until it actually is.
+>
+> 🔴 **Correction carried in this draft:** the "9.3KB / 9,441 B initial load" figure quoted before
+> 2026-09-05 is **wrong**. It counted `index.html + app.js` and assumed all four esbuild chunks were
+> lazy; one of them (`chunk-IWUKCSCV.js`, the shared crypto/state core, 1,430 B) is a **static** import
+> and loads on first paint. Correct figure: **10,864 B**. Dependent documents were updated (the derived
+> "24×" ratio became "~21×" — derived values do not contain the original number, so they cannot be
+> found by searching for it).
 
 ---
 
