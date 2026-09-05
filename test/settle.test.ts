@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parts, isDone, balances, advanced, settle, sharesOf } from '../src/client/settle'
+import { parts, isDone, balances, advanced, settle, sharesOf, shareSummary } from '../src/client/settle'
 import type { RoomState, Booking } from '../src/client/api'
 
 // 金額の計算は間違えると実害が出る。前身アプリの挙動をそのまま固定する
@@ -164,5 +164,42 @@ describe('割り切れない金額', () => {
       bearers.add(Math.abs(bals.get('b')!))
     }
     expect(bearers.size).toBeGreaterThan(1)
+  })
+})
+
+describe('端数を誰が負うかの表示', () => {
+  const pl = ['a', 'b', 'c']
+
+  it('割り切れるときは担い手がいない', () => {
+    const r = shareSummary(3000, pl, 'x')
+    expect(r).toEqual({ base: 1000, delta: 0, bearers: [] })
+  })
+
+  it('割り切れないときは1人だけが1円多い', () => {
+    const r = shareSummary(100, pl, 'x')
+    expect(r.base).toBe(33)
+    expect(r.delta).toBe(1)
+    expect(r.bearers).toHaveLength(1)
+  })
+
+  it('2円余るときは2人が負う', () => {
+    const r = shareSummary(101, pl, 'x')
+    expect(r.base).toBe(33)
+    expect(r.delta).toBe(1)
+    expect(r.bearers).toHaveLength(2)
+  })
+
+  it('基準額と担い手の合計は、必ず金額に一致する', () => {
+    for (let n = 1; n <= 8; n++) {
+      const ids = Array.from({ length: n }, (_, i) => `p${i}`)
+      for (const amount of [1, 7, 100, 999, 3001, 99999]) {
+        const { base, delta, bearers } = shareSummary(amount, ids, `b-${n}-${amount}`)
+        expect(base * n + delta * bearers.length).toBe(amount)
+      }
+    }
+  })
+
+  it('1人なら全額をその人が負い、端数は出ない', () => {
+    expect(shareSummary(101, ['a'], 'x')).toEqual({ base: 101, delta: 0, bearers: [] })
   })
 })

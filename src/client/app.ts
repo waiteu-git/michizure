@@ -8,7 +8,7 @@ import {
   type Session,
 } from './api.ts'
 import { remember, remembered, rememberedAll, forget } from './session-store.ts'
-import { balances, advanced, settle, parts, isDone } from './settle.ts'
+import { balances, advanced, settle, parts, isDone, shareSummary } from './settle.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins } from './origins.ts'
 import {
@@ -64,6 +64,20 @@ let state: RoomState | null = null
 let formParts: string[] | null = null
 /** 修正中の記録のID。null = 新規追加 */
 let editingId: string | null = null
+
+/**
+ * 🔴 これから作る記録の id を、保存の時ではなく**今この場で**確保しておく。
+ *
+ * 端数の1円を誰が負うかは予約IDから決まる（settle.ts の sharesOf）。
+ * 保存時に採番すると、**入力中に見せた「1円は たなか」と、保存後のカードの担い手が違う**
+ * ものになる。見せた通りに保存されないのは、金額を扱う画面では最悪の部類。
+ */
+let draftId = crypto.randomUUID()
+
+/** メンバーIDから名前。見つからない時は '?'（消されたメンバーを参照しても壊れない） */
+function nameOfMember(id: string): string {
+  return state?.members.find((m) => m.id === id)?.name ?? '?'
+}
 
 function toast(msg: string) {
   const t = $('toast')
@@ -336,10 +350,19 @@ function renderFormParts() {
           )
           .join('')
   const amount = Number(($('amount') as HTMLInputElement).value)
-  $('partsInfo').textContent =
-    chosen.length && Number.isFinite(amount) && amount > 0
-      ? `${chosen.length}人で割る → 1人 ${yen(amount / chosen.length)}円`
-      : `${chosen.length}人で割る`
+  // ⚠ `amount / chosen.length` を出してはいけない。実際に課されるのは sharesOf の
+  // 整数配分で、100円を3人なら 34/33/33。割り算の結果（33.33…）を丸めて見せると
+  // **画面が「1人33円」と言い、精算は34円を課す**（README が「端数は丸めない」と
+  // 書いているその画面で矛盾していた。2026-09-06 の設計レビューで発見）
+  if (chosen.length && Number.isFinite(amount) && amount > 0) {
+    const { base, delta, bearers } = shareSummary(amount, chosen, editingId ?? draftId)
+    const who = bearers.map((id) => nameOfMember(id)).join('・')
+    $('partsInfo').textContent = bearers.length
+      ? `${chosen.length}人で割る → 1人 ${yen(base)}円（端数の${yen(Math.abs(delta))}円は ${who}）`
+      : `${chosen.length}人で割る → 1人 ${yen(base)}円`
+  } else {
+    $('partsInfo').textContent = `${chosen.length}人で割る`
+  }
 }
 
 function renderBookings() {
@@ -354,7 +377,14 @@ function renderBookings() {
         <div class="card-head"><b>${esc(b.category)}</b> ${esc(b.description)}
           <span class="amount">${yen(b.amount)}円</span></div>
         <div class="muted">${esc(nameOf(b.payer))} が立替 ／ ${parts(b, ids).length}人で割る
-          （${parts(b, ids).map((id) => esc(nameOf(id))).join('・')}）</div>
+          （${parts(b, ids).map((id) => esc(nameOf(id))).join('・')}）${(() => {
+            const { delta, bearers } = shareSummary(b.amount, parts(b, ids), b.id)
+            // ⚠ 旅を通した「当番」の集計は出さない。担い手は予約IDから決まる疑似乱数で、
+            // 同じ人に続けて当たるのは普通。集計すると公平に配っているのに不公平に見える
+            return bearers.length
+              ? `<br>端数の${yen(Math.abs(delta))}円は ${bearers.map((id) => esc(nameOf(id))).join('・')}`
+              : ''
+          })()}</div>
         <div class="paid">${others
           .map(
             (id) =>
@@ -466,10 +496,12 @@ function saveBooking() {
   } else {
     state.bookings.push({
       // オフラインで採番すると連番は必ず衝突する（設計 §6）
-      id: crypto.randomUUID(),
+      id: draftId,
       ...fields,
       paid: {},
     })
+    // 次の記録のぶんを確保し直す。ここを忘れると全記録が同じIDになる
+    draftId = crypto.randomUUID()
   }
   cancelEdit()
   renderBookings()

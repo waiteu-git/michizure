@@ -85,6 +85,32 @@ export function sharesOf(amount: number, participants: string[], bookingId: stri
   return out
 }
 
+/**
+ * 端数を誰が負うかを、表示のために取り出す。
+ *
+ * ⚠ 「1円多い人」を**旅を通して集計してはいけない**。担い手は予約IDから決まる
+ * 疑似乱数なので、3件続けて同じ人に当たることが普通に起きる。集計を出すと
+ * 「+3円 / −1円」のような表になり、**公平に配っているのに不公平に見える**。
+ * 出してよいのは1件ごとの事実だけ。
+ */
+export function shareSummary(
+  amount: number,
+  participants: string[],
+  bookingId: string,
+): { base: number; delta: number; bearers: string[] } {
+  const n = participants.length
+  if (n === 0) return { base: 0, delta: 0, bearers: [] }
+  const shares = sharesOf(amount, participants, bookingId)
+  // ⚠ 基準は sharesOf と同じ計算で出す。「最頻値」にしてはいけない＝
+  // 余りが人数の半分を超えた瞬間に多数派と少数派が入れ替わり、
+  // 101円を3人（34/34/33）で「基準34・1円**少ない**人」と反転する（テストで捕まえた）。
+  // 利用者にとって意味があるのは常に「端数を**負う**人」なので、切り捨てを基準に固定する。
+  const base = Math.trunc(Math.round(amount) / n)
+  const bearers = [...shares].filter(([, v]) => v !== base).map(([id]) => id)
+  const delta = bearers.length ? (shares.get(bearers[0]) ?? base) - base : 0
+  return { base, delta, bearers }
+}
+
 /** 各メンバーの立替合計（支払った総額） */
 export function advanced(state: RoomState): Map<string, number> {
   const totals = new Map(state.members.map((m) => [m.id, 0]))
