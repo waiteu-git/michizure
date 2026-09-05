@@ -40,6 +40,9 @@ const SEPARATORS = /[\s・、,／/｜|\-‐–—_]+/g
  *   1. NFKC        … 濁点の合成/分解・全角半角・半角カタカナを揃える
  *   2. カタカナ→ひらがな … IME の状態でカタカナ確定してしまう事故を吸収する
  *   3. 区切りと空白を除去 … 区切り方の違いで弾かれないようにする
+ *   4. NFC（kdfVersion 2 以降） … 🔴 **3 の後でなければならない。**
+ *      NFKC は単体の濁点「゛」を「空白 + 結合濁点」に展開するので、
+ *      3 が空白を消すまで合成できない。この手順が抜けていたのが kdfVersion 1 の欠陥。
  *
  * ⚠ NFC ではなく NFKC を選んでいる。パスワードの国際化を扱う PRECIS（RFC 8265）は
  * エントロピー保持のため NFC を規定しており、**これは意図的な逸脱**である。
@@ -51,7 +54,7 @@ const SEPARATORS = /[\s・、,／/｜|\-‐–—_]+/g
  * だから `kdfVersion` を部屋ごとに保存し、部屋が作られた時の規則で導出する。
  */
 export function normalizePassphrase(passphrase: string, kdfVersion = KDF_VERSION): string {
-  if (kdfVersion !== 1) {
+  if (kdfVersion !== 1 && kdfVersion !== 2) {
     throw new Error(`未知の kdfVersion: ${kdfVersion}（この版では導出できない）`)
   }
   const nfkc = passphrase.normalize('NFKC')
@@ -62,7 +65,13 @@ export function normalizePassphrase(passphrase: string, kdfVersion = KDF_VERSION
       return n >= 0x30a1 && n <= 0x30f6 ? String.fromCodePoint(n - 0x60) : c
     })
     .join('')
-  return hiragana.replace(SEPARATORS, '')
+  const stripped = hiragana.replace(SEPARATORS, '')
+  // 🔴 手順4（NFC）。**3 の後でなければならない。**
+  // NFKC は単体の濁点「゛」を「空白 + 結合濁点」に展開する（設計 §2.2 の実測表）。
+  // 空白が間に挟まっている間は合成できず、3 がその空白を消して初めて
+  // 「は」+U+3099 が隣接する。だから合成は 3 の後にしか成立しない。
+  // ⚠ kdfVersion 1 はこの行を持たない＝同じ見た目の合言葉から違う鍵が出た。
+  return kdfVersion === 1 ? stripped : stripped.normalize('NFC')
 }
 
 /**

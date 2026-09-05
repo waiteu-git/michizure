@@ -52,8 +52,24 @@ export const MAX_ITERATIONS = 5_000_000
  * ⇒ 部屋ごとに保存し、その部屋が作られた時の規則で導出する。
  * これにより「NFKC を選ぶ」という規格からの逸脱も、後から取り消せる判断になる。
  */
-export const KDF_VERSION = 1
-const KNOWN_KDF_VERSIONS = [1]
+export const KDF_VERSION = 2
+const KNOWN_KDF_VERSIONS = [1, 2]
+
+/**
+ * 版ごとの違い（`normalizePassphrase` が正典）:
+ *
+ * - **1** … NFKC → カタカナ畳み込み → 区切り除去。**設計 §2.2 の ④NFC が抜けている。**
+ *   ⇒ 単体の濁点・半濁点（`゛` `゜` `ﾞ` `ﾟ`）で打たれた合言葉が分解形のまま残り、
+ *   **画面上まったく同じ合言葉から違う鍵が出る**（`は`+U+3099 と `ば` は別の文字列）。
+ *   機構＝NFKC(`゛`) は「空白 + 結合濁点」を生み、続く区切り除去が空白を消すため
+ *   合成が起きない。設計 §2.2 の実測表がこの空白生成を最初から記録していた。
+ * - **2** … 1 に ④NFC を足したもの。設計 §2.2 のパイプラインどおり。
+ *
+ * ⚠ 1 を残してあるのは、**本番にデプロイ済みかを実装側から確認できない**ため
+ *   （Cloudflare の操作は人間の手）。既に 1 で作られた部屋があれば、消すと二度と開かない。
+ *   **一度もデプロイしていないことを人間が確認できたら、1 は削除してよい**
+ *   （launch 前ならそれが最も綺麗＝壊れた版を恒久的に抱えずに済む）。
+ */
 
 export function kdfVersionInvalid(v: unknown): boolean {
   return typeof v !== 'number' || !KNOWN_KDF_VERSIONS.includes(v)
