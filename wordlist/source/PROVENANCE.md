@@ -10,6 +10,20 @@
 | 語数 | 2,048 |
 | ライセンス | **MIT**（BIP-39 本文の Copyright 節に "This BIP falls under the MIT License." と明記。一次情報で確認済み: `https://raw.githubusercontent.com/bitcoin/bips/master/bip-0039.mediawiki`） |
 
+### 🔴 MIT の許諾文は `THIRD-PARTY-NOTICES.md`（リポジトリ直下）にある
+
+**この記録は「調べた結果」であって、MIT が求める表示ではない。** MIT の唯一の条件は
+許諾文と著作権表示が複製に**同行する**ことで、それを置く場所はリポジトリ直下の
+[`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md)。派生物（`michizure-ja-1024.txt`・
+`src/client/wordlist-data.ts`・そこからバンドルされる `public/chunk-*.js`）を触るときは、
+先にそちらを読むこと。
+
+> ⚠ 2026-09-05 の監査で発見：**その表示は同日まで存在せず**、リポジトリ内で MIT に触れていたのは
+> この行・`docs/passphrase-wordlist.md`・`README.draft.md` の散文だけだった
+> ＝**確認は済んでいたが同梱が抜けていた**。
+> ⚠ ただし**義務に違反していた状態ではない**（非公開かつ未デプロイ＝複製が第三者へ渡っていない）。
+> 発火はデプロイかリポジトリ公開の早いほう。理由と期限は `THIRD-PARTY-NOTICES.md` 側に書いてある。
+
 ### 🔴 このファイルをそのまま使ってはいけない
 
 **実体は NFKD（分解形）である。** 2,048語のうち **644語が結合濁点・半濁点**（U+3099 / U+309A）を含み、

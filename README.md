@@ -4,17 +4,79 @@
 
 設計: [`docs/superpowers/specs/2026-08-09-michizure-phase1-design.md`](docs/superpowers/specs/2026-08-09-michizure-phase1-design.md)
 実装計画: [`docs/superpowers/plans/2026-08-09-michizure-phase1a-backend.md`](docs/superpowers/plans/2026-08-09-michizure-phase1a-backend.md)
+公開前にユーザーの手でやること: [`docs/before-launch-checklist.md`](docs/before-launch-checklist.md)
 
-現在の状態: **Phase 1a（バックエンド）完了。フロントエンドは未着手（Phase 1b）。**
+⚠ この README は**開発用（内部向け）**。提出・公開向けの文面は [`README.draft.md`](README.draft.md) が別に在り、
+そちらが**外向けの正典**。片方だけ直すと必ずズレる。
+
+## 現在の状態
+
+**サーバー（Phase 1a）もクライアント（Phase 1b）も実装済み。残っているのはデプロイと公開ゲート。**
+
+🔴 2026-09-05 の監査まで、この行は「フロントエンドは未着手（Phase 1b）」と書いてあった。
+⚠ **書いた時点（2026-08-10・`d033a80`）では正しかった。** クライアントはその3日後
+（2026-08-13・`f646839`）に入り、**この行だけが取り残されて23日そのままだった**
+＝`src/client/` の11モジュールと `public/` の配信物が在るのに、入口は「無い」と言い続けていた。
+README はリポジトリの入口なので、**この1行だけを読んだ人は「アプリが無い」と判断する**。
+⇒ 状態の記述は**書いた時に正しくても腐る**。直すときは記憶ではなく**実物と突き合わせる**こと。
+
+### 動くもの（コードで確認できる）
+
+- **部屋**: 作成・入室・破棄（`src/index.ts` がルーティング、`src/room.ts` が Durable Object）
+- **鍵と暗号化**: 合言葉 → 正規化 → PBKDF2 → HKDF で authKey / encKey に分岐（`src/keys.ts`）。
+  合言葉も復号鍵もサーバーへ送らない
+- **画面**: メンバー追加・記録の追加/修正/削除・割る相手の選択・支払い済みチェック・
+  立替と残高・「誰が誰にいくら払うか」（`src/client/app.ts` と `public/index.html`）
+- **ローカル優先**: 変更は**まず端末に確定**し、送信はその後ろで行う。衝突は自動マージせず
+  利用者に選ばせる（`src/client/store.ts`）
+- **リアルタイム同期**: WebSocket（Hibernation）で他の端末へ中継。書いた本人には返さない。
+  切断は異常として扱わず自動で繋ぎ直す（`src/client/live.ts`）
+- **オフラインでの再読み込み**: Service Worker（`public/sw.js`・出所は `scripts/build-sw.mjs`）。
+  ⚠ **これは 2026-09-05 に足したもの**で、それまで「電波が無くても動く」は**半分しか本当でなかった**
+  ＝入力は localStorage に残るが、**リロードするとアプリ自体が読み込めなかった**
+- **前のアプリからの取り込み**: travel-calculation の書き出しファイルを読む（`src/client/import.ts`）
+- **合言葉の生成**: 1,024語×5語 ≒ 50bit（`src/client/passphrase.ts`・`wordlist/`）
+
+### 残っているもの
+
+- **デプロイ**（記録上まだ。`docs/before-launch-checklist.md` B-3 が未チェック）。手順は下の「デプロイ」節
+- **公開ゲート4点**。正典＝`docs/before-launch-checklist.md` §C
+- **単語リストの目視確認**（同 §A-2）。機械で判定できる条件は全て通してあるが、
+  **不快語と馴染みのなさは人にしか判定できない**
+- RevenueCat は**入っていない**（`package.json` に依存が在るだけ。`src/` から一度も import していない）
+
+## 構成
+
+| 場所 | 中身 |
+|---|---|
+| `src/index.ts` `src/room.ts` `src/token.ts` | Worker と Durable Object |
+| `src/keys.ts` `src/box.ts` `src/types.ts` | **サーバーとクライアントの両方から読む**。鍵導出・暗号化・定数は1つの出所 |
+| `src/client/` | ブラウザ側。`app.ts` が画面、他は API・同期・実時間中継・精算・合言葉・取り込み |
+| `public/` | 配信物。`index.html` と `robots.txt` は手書き、`app.js` / `chunk-*.js` / `sw.js` は**生成物** |
+| `test/` | vitest（`@cloudflare/vitest-pool-workers`）。サーバーとクライアントのロジック両方 |
+| `wordlist/` | 合言葉の単語リストと採番済みレビュー表 |
+
+⚠ `public/` の JS を手で直さない。出所は `src/client/` で、**次のビルドで黙って消える**。
 
 ## 開発
 
 ```
 npm install
-npm test          # 全テスト（pretest で privacy 設定も検査される）
-npm run typecheck # wrangler types + tsc
-npm run dev       # ローカル起動（http://localhost:8787）
+npm test               # 全テスト。pretest で privacy 設定と単語リストも検査される
+npm run typecheck      # wrangler types → サーバー(tsconfig.json) → クライアント(tsconfig.client.json)
+npm run dev            # クライアントをビルドしてからローカル起動（http://localhost:8787）
+npm run build:client   # src/client → public/（app.js・chunk-*.js・sw.js を作り直す）
+npm run build:wordlist # wordlist/rejected.txt を反映して単語リストを作り直す
 ```
+
+🔴 **「緑」は「テストが実際に走った」ことまで見る。** `pretest`（privacy 検査と単語リスト検査）が
+落ちると **vitest は起動しない**。この時、前回のテスト数を記憶で持ち回ると「N件パス」だけが
+生き残る（2026-09-05 に実際に起きた）。⇒ 出力に `Tests  N passed` の行が**その回に出ていること**を目で確かめる。
+
+⚠ `npm run build:wordlist` は**穴埋め**で置き換える＝**1語落とせば1語だけ入れ替わり、他の語は動かない**
+（落とした語の位置に一番近い予備が入る）。以前は不採用語をプール段階で落としていたため選抜が引き直され、
+**1語（「たいほ」）落としただけで254語が入れ替わっていた**（2026-09-05 実測・同日に修正）。
+それでは人手のレビューが成立しない＝**見て通した語が消え、見ていない語が入る**。
 
 ローカルサーバーを起動してから、ブラウザがやることを一通り叩く通し確認:
 
@@ -31,33 +93,107 @@ node scripts/e2e-local.mjs
 | GET | `/api/rooms/:id/salt` | なし | 鍵導出に要る `{salt, iterations, kdfVersion}`。秘密ではない |
 | POST | `/api/rooms/:id/enter` | `authKey` | 入室してトークンを得る |
 | GET/PUT | `/api/rooms/:id/blob` | Bearer | 暗号文の取得・更新 |
-| GET | `/api/rooms/:id/ws?token=` | トークン | WebSocket で中継を受ける |
+| GET | `/api/rooms/:id/ws?token=&client=` | トークン | WebSocket で中継を受ける（`Upgrade: websocket` 必須）|
 | DELETE | `/api/rooms/:id` | `authKey` | 部屋ごと破棄する |
+| GET | `/r/:id` | なし | **利用者が共有する URL**。Worker が明示的に画面（`/`）を返す |
+| GET | それ以外 | なし | `public/` の静的配信（`[assets]`）。一致しなければ Worker へ来る |
+
+⚠ `client=` を落とすと**書いた本人にも中継し返す**。⚠ `/r/:id` で 404 を返すと、
+リンクを受け取った人が開いても何も出ない（アセットに一致しないパスは Worker へ来るため、明示的に返している）。
+
+## 配信物の大きさ
+
+**構造**（ビルドが変わっても変わらないのはここだけ）:
+
+- **最初の読み込み** ＝ `index.html` + `app.js` + **静的 import のチャンク**
+- **遅延** ＝ 単語リスト＋合言葉（部屋を作る時だけ）／取り込み／`api.ts` の一部（破棄・受信の復号）
+- `sw.js` は読み込みを妨げない
+
+🔴 **静的チャンクを数え落とさないこと。** 2026-09-05 より前に出回っていた「9,441 B」は
+`index.html + app.js` しか数えず、**チャンクが全部遅延だと思い込んでいた**値で、誤りである。
+静的か遅延かは成果物を見れば分かる:
+
+```
+grep -o 'from"\./chunk-[^"]*"' public/app.js       # 静的＝最初の読み込みに入る
+grep -o 'import("\./chunk-[^"]*")' public/app.js   # 遅延
+grep -o 'from"\./chunk-[^"]*"' public/chunk-*.js   # チャンク間の共有（下の🔴の機構が見える）
+for f in public/index.html public/*.js; do printf '%-28s %s\n' "$f" "$(gzip -9c "$f" | wc -c)"; done
+```
+
+**実測（2026-09-05 23:07 のビルド・`gzip -9`）**: 最初の読み込み **11,402 B**
+＝ `index.html` 3,416 + `app.js` 6,308 + 静的チャンク2本（908 + 770）。
+遅延＝単語リスト 4,600 / 取り込み 1,021 / `api.ts` の一部 193。`sw.js` 955。
+
+⚠ **数字を持ち回らない。** 同じ 2026-09-05 の夜、監査の修正（`b402b3c`）が入っただけで
+最初の読み込みは **10,933 B から上の値へ変わり、静的チャンクの分かれ方まで変わった**。
+チャンクの名前は内容ハッシュなので毎回変わる。**外へ出す数字は出す直前に測り直すこと。**
+
+⚠ その 10,933 B 自体も途中の値である（Service Worker を足した後・`b402b3c` の前）。
+`README.draft.md` はもう1つ前の 10,864 B（SW を足す前）を挙げている＝**同じ夜に3つの値が回った**。
+**どれもその時のビルドでは正しい。** ⇒ 数字を引用する時は**どのビルドの値か**を必ず添える。
+添えないと、後から見た人には「2つの文書が矛盾している」としか見えない。
+
+🔴 **形が変わった原因は精算の丸め修正ではない**（この節は最初そう書いていた。同じ 2026-09-05 に訂正）。
+原因は**合言葉の強度判定が `normalizePassphrase` を呼ぶようになった**こと＝`src/client/passphrase.ts` が
+`src/keys.ts` を読み始めた。これで `keys.ts` は「最初に読む側」と「遅延する単語リスト側」の
+**両方から使われる共有コード**になり、`--splitting` がそれを独立したチャンクへ切り出した。
+⇒ **遅延モジュールに import を1本足すと、最初に読む物の形が変わる。**
+単語リストのチャンクが別のチャンクを `from` で読んでいれば、それが切り出された共有部分である
+（上の3本目の grep で見える）。**「何を直したか」から「何が増えたか」を推測しない。**
 
 ## デプロイ
 
-⚠ **公開はリタス初版公開後**（設計 §1）。それまで本番へデプロイしない。公開には4つのゲートがあり、そのうち3つはこのリポジトリの外で決まる（リタス初版公開・法務照会を踏まえた規約類・IPログ保持方針・ユーザーの承認）。
+⚠ **公開はリタス初版公開後**（設計 §1）。**本番へ出した記録は無い**（`docs/before-launch-checklist.md` B-3 が未チェック）。
 
-本番のトークン署名鍵は wrangler のシークレットとして設定する（`wrangler.toml` の `[vars]` は開発用）。
+⚠ ただし**デプロイ済みかどうかを実装側から確認する手段は無い**（Cloudflare の操作は人間の手で、
+このリポジトリからは見えない）。**「まだ出していない」を証拠にできるのは人間だけ**である
+＝下の kdfVersion 1 を消してよいかの判断もここに掛かっている。
+
+**公開ゲートは4点**（①リタス初版の公開 ②法務照会の回答を踏まえた規約類 ③IPログ保持方針
+④ユーザーの公開承認）で、**判断はどれもこのリポジトリの外**で決まる。正典＝`docs/before-launch-checklist.md` §C。
+（2026-09-05 の監査まで、ここは「4つのうち3つは外」と書きながら4つ並べていた）
 
 ```
 wrangler secret put TOKEN_SECRET
-npm run deploy
+npm run deploy   # クライアントのビルドも一緒に走る
 ```
 
-`[vars]` の値は `wrangler types` の生成物にそのまま埋め込まれるため、本番の鍵をそこへ書いてはならない（`npm test` の pretest が検査する）。
+🔴 **`wrangler.toml` に `TOKEN_SECRET` を書いてはいけない。** `[vars]` の値は deploy 時に
+**同名のリモートシークレットを置き換える**ので、上の `secret put` の後に deploy すると
+**本番が開発用の値に戻り、誰でもアクセストークンを偽造できる**（wrangler 4.120.0 の
+`checkRemoteSecretsOverride` で確認・2026-09-05）。
 
-## PBKDF2 の反復回数を決める
+開発・テスト用の値は `.dev.vars`（**意図的に git 追跡している**＝無いとクローンした人の
+`npm test` / `npm run dev` が動かない。値が公開の既定値だから置ける）。
 
-`src/keys.ts` の `PBKDF2_ITERATIONS`。**入室のたびに1回だけ、利用者の端末のブラウザで走る。**
+⚠ **2026-09-05 の監査まで、この節は逆のこと**（「`wrangler.toml` の `[vars]` は開発用」）**を書いていて、
+リポジトリも実際にその形をしていた。** 検査は `npm test` の pretest が**両方の面**で持つ＝
+`wrangler.toml` に書くと落ち、`.dev.vars` の値を既定から変えても落ちる。
+
+⚠ `[vars]` の値は `wrangler types` の生成物（`worker-configuration.d.ts`）にもそのまま埋め込まれる。
+だからあのファイルは追跡しない（`npm run typecheck` が毎回作り直す）。
+
+## PBKDF2 の反復回数
+
+`src/keys.ts` の `PBKDF2_ITERATIONS` ＝ **600,000**。**入室のたびに1回だけ、利用者の端末のブラウザで走る。**
+
+✅ **2026-08-14 に実機で測り、据え置きで確定済み**（Android 実機 / Chrome 151 で 600,000回=70ms、
+1,000,000回でも 116ms）。正典＝`docs/passphrase-strength.md`。**再litigate不要。**
+
+⚠ **Mac の数値から一般化しない。**「ブラウザは Node の2.4倍遅い」は Mac だけの性質で、
+2026-08-14 に実機で否定された（実機の 70ms は Mac の Node の 73ms より速い）。
+「一番遅い端末が体験を決める」原則は生きているので、**測り直すなら実機で測る**。
 
 ```
-node scripts/bench-pbkdf2.mjs   # Mac での基準値（速い側の下限）
+node scripts/bench-pbkdf2.mjs   # Mac / Node の値。判断には使わない
 ```
 
-実機の値は `bench/pbkdf2.html` を端末で開いて測る。**判断は実機の値で行う。** サーバー側や Mac の数値は参考にならない（一番遅い端末が体験を決める）。
+実機の値は `bench/pbkdf2.html` を端末で開いて測る。
 
-⚠ このページは端末にダウンロードして直接開く（`file://`）か `https://` で開くこと。Mac で簡易サーバーを立てて `http://192.168.x.x:8000/` のように LAN の IP で開くと、安全なコンテキストにならず `crypto.subtle` が使えない。
+⚠ このページは端末にダウンロードして直接開く（`file://`）か `https://` で開くこと。Mac で簡易サーバーを立てて
+`http://192.168.x.x:8000/` のように LAN の IP で開くと、安全なコンテキストにならず `crypto.subtle` が使えない。
+
+⚠ 値を変えても**既に作った部屋は壊れない**（反復回数は部屋ごとに保存している）。
 
 ## 既知の限界（塞いでいない・承知のうえ）
 
@@ -75,6 +211,11 @@ node scripts/bench-pbkdf2.mjs   # Mac での基準値（速い側の下限）
   「運営者にも中身が見えない」等を対外的に謳ってはならない。設計 §7.5 を必ず読むこと
 - **メタデータは暗号化されない**（部屋の存在・時刻・暗号文のサイズ・更新頻度・IPアドレス）。
   「何も持たない」ではなく「暗号文とメタデータを持つ」である
+- 合言葉の正規化は**鍵導出の契約の一部**で、規則の版を `kdfVersion` として部屋ごとに保存する。
+  現行は **2**（NFKC → カタカナ→ひらがな → 区切り除去 → **NFC**）。
+  🔴 **1 は欠陥版**（最後の NFC が無く、単体の濁点で打たれた合言葉から違う鍵が出る）だが、
+  **既に 1 で作られた部屋があれば二度と開けなくなる**ので残してある。
+  一度もデプロイしていないことを人間が確認できたら、1 は消してよい（`src/types.ts` の該当コメント）
 - メンバー20人上限は**クライアント側でのみ強制**される。サーバーは検証できない
 - 合言葉を紛失するとデータは復旧できない
 - Workers Logs は `wrangler.toml` で明示的に無効化している。**新規 Worker では既定で有効**なので、
