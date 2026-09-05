@@ -94,6 +94,9 @@
       /* 声で伝える＝読み上げる人のために大きくする */
       .passbox.say { font-size: 2rem; line-height: 1.5; letter-spacing: .04em; }
       @media (prefers-reduced-motion: reduce) { .stub { transition: none; } }
+      #qr { margin: .3rem 0 .5rem; }
+      #qr svg { width: 100%; max-width: 15rem; height: auto; display: block;
+        border: 1px solid var(--line); border-radius: 4px; }
       .passbox {
         border: 2px solid var(--accent); border-radius: 10px; padding: 1rem;
         font-size: 1.15rem; font-weight: 700; letter-spacing: .02em; word-break: break-all;
@@ -160,8 +163,21 @@
       <div class="ticket" id="ticket">
         <div class="stub" id="stubUrl">
           <span class="stub-label">リンク</span>
+          <!--
+            ⚠ QR は【左半分だけ】に置く。右半分（合言葉側）に置くと
+            1枚でリンクと合言葉が揃い、裂く意味が消える（設計 §7.6.1 ②）。
+            載せるのは入口だけ（版・反復回数・salt）で、中身は載せない（§9.1）。
+          -->
+          <div id="qr" hidden></div>
+          <p class="muted" id="qrHint" hidden>
+            電波が無くても、相手のカメラでこれを読めば部屋に入れます。<br>
+            合言葉は声で伝えてください。
+          </p>
           <p class="muted" id="shownUrl"></p>
-          <button class="ghost small" id="copyUrl">リンクを送る</button>
+          <div class="actions">
+            <button class="ghost small" id="copyUrl">リンクを送る</button>
+            <button class="ghost small" id="showQr">QRを出す</button>
+          </div>
         </div>
         <div class="perf" id="perf" role="separator" aria-label="切り取り線"></div>
         <div class="stub" id="stubPass">
@@ -186,6 +202,16 @@
 
     <section id="join" hidden>
       <h1>合言葉で入る</h1>
+      <!-- 圏外入室券つきのリンクで開いた時だけ出る（設計 §9.1） -->
+      <!-- 圏外で入った部屋を、電波が戻ってから正式に繋ぐ時（設計 §9.1） -->
+      <p class="muted" id="rejoinHint" hidden>
+        <b>電波が戻りました。</b>合言葉をもう一度入れると、相手の記録と合流します。
+        この端末で足した記録はそのまま残ります。
+      </p>
+      <p class="muted" id="offlineHint" hidden>
+        <b>電波が無くても入れます。</b>合言葉を入れてください。
+        相手の記録は、電波が戻ったときに合流します。
+      </p>
       <label class="field"><span>部屋のID（リンクの末尾16文字）</span>
         <input id="joinRoom" autocapitalize="characters" autocomplete="off" /></label>
       <label class="field"><span>合言葉</span>
@@ -216,8 +242,13 @@
       <div id="bookingForm">
         <label class="field"><span>種類</span>
           <select id="category">
-            <option>航空券</option><option>宿泊</option><option>食費</option>
-            <option>交通費</option><option>アクティビティ</option><option>その他</option>
+            <!--
+              ⚠ 並びが既定値になる。旅の【最中】に一番打つのは食費で、航空券は
+              旅の前に1回あるかどうか。頻度の高い順に並べる（2026-09-06 の
+              設計レビューが「航空券が既定なのはほぼ当たらない」と指摘）。
+            -->
+            <option>食費</option><option>交通費</option><option>宿泊</option>
+            <option>アクティビティ</option><option>航空券</option><option>その他</option>
           </select></label>
         <label class="field"><span>内容</span><input id="description" placeholder="夕食" /></label>
         <label class="field"><span>金額</span><input id="amount" type="number" inputmode="numeric" /></label>

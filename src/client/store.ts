@@ -58,6 +58,18 @@ export function isDirty(roomId: string): boolean {
   return read(roomId)?.dirty ?? false
 }
 
+/**
+ * 圏外入室の直後に、土台として置く（設計 §9.1）。
+ *
+ * ⚠ 渡すのは**空の部屋**。それが入った人にとっての真の共通祖先だから、
+ * 電波が戻った時の3方向マージで双方の追加が全部残る。
+ * ⚠ `dirty: false` で置くこと。まだ何も変えていないのに送ろうとすると、
+ * 相手の記録を空で上書きする。
+ */
+export function adoptAsBase(roomId: string, state: RoomState): void {
+  write(roomId, { state, baseStamp: null, base: state, dirty: false })
+}
+
 /** 変更を端末へ確定させる。**通信は待たない** */
 export function commitLocal(roomId: string, state: RoomState): void {
   const prev = read(roomId)

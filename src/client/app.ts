@@ -13,11 +13,15 @@ import { balances, advanced, settle, parts, isDone, shareSummary } from './settl
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins } from './origins.ts'
+import { entryFromHash, entryUrl, emptyRoomForEntry } from './entry.ts'
+import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
+import { KDF_VERSION } from '../types.ts'
 import {
   applyRemote,
   commitLocal,
   localState,
   takePendingConflicts,
+  adoptAsBase,
   isDirty,
   pull,
   push,
@@ -33,6 +37,8 @@ import {
 const passphraseModule = () => import('./passphrase.ts')
 // 取り込みも、使う人だけが運べばよい
 const importModule = () => import('./import.ts')
+// QR は「QRを出す」を押した人だけが運ぶ（ライブラリが 7.6KB あるため）
+const qrModule = () => import('./qr.ts')
 
 /** 取り込んだ状態を一時的に持つ。「作る」を押した時に部屋の中身になる */
 let pendingImport: RoomState | null = null
@@ -76,6 +82,9 @@ let editingId: string | null = null
  * ものになる。見せた通りに保存されないのは、金額を扱う画面では最悪の部類。
  */
 let draftId = crypto.randomUUID()
+
+/** 直近に作った部屋の入口券（QR に載せるもの）。中身は含まない */
+let entry: { roomId: string; salt: string; iterations: number; kdfVersion: number } | null = null
 
 /** メンバーIDから名前。見つからない時は '?'（消されたメンバーを参照しても壊れない） */
 function nameOfMember(id: string): string {
@@ -134,6 +143,11 @@ async function doCreate() {
     commitLocal(s.roomId, state)
     ;($('shownPass') as HTMLElement).textContent = passphrase
     ;($('shownUrl') as HTMLElement).textContent = `${shareOrigin()}/r/${s.roomId}`
+    // 圏外入室券（設計 §9.1）。中身は載せない＝QR が小さく、実機で読める
+    entry = { roomId: s.roomId, salt: s.salt, iterations: PBKDF2_ITERATIONS, kdfVersion: KDF_VERSION }
+    $('qr').hidden = true
+    $('qrHint').hidden = true
+    $('showQr').textContent = 'QRを出す'
     show('created')
   } catch (e) {
     toast(`作成に失敗しました: ${e instanceof Error ? e.message : e}`)
@@ -150,13 +164,36 @@ async function doJoin() {
   toast('合言葉から鍵を作っています…')
   try {
     session = await enterRoom(roomId, pass)
-    state = await loadState(session)
-    remember(session, state.name)
-    commitLocal(roomId, state)
-    renderSync('synced')
-    renderRoom()
+    // 🔴 端末に控えがあるなら**上書きしない**。圏外入室（§9.1）で入った端末は
+    // すでに自分の記録を持っている＝ここで loadState を書き込むと、
+    // 圏外で足した記録が黙って消える。pull は3方向マージを通す
+    if (localState(roomId)) {
+      const r = await pull(session)
+      state = localState(roomId)
+      remember(session, state?.name ?? '')
+      if (r === 'conflict') return showConflict(session)
+      if (r === 'merged') toast('相手の記録と合わせました')
+      renderSync(isDirty(roomId) ? 'pending' : 'synced')
+      renderRoom()
+      if (isDirty(roomId)) void push(session, clientId).then(renderSync)
+    } else {
+      state = await loadState(session)
+      remember(session, state.name)
+      commitLocal(roomId, state)
+      renderSync('synced')
+      renderRoom()
+    }
   } catch (e) {
     const msg = String(e instanceof Error ? e.message : e)
+    // 🔴 つながらない時は、入口券があれば圏外で入る（設計 §9.1）。
+    // ⚠ 合言葉が違う・部屋が無いといった**サーバーが答えを返した**場合には
+    // 落ちてはいけない。それは通信できているので、正しい理由を伝えるべき場面
+    const answered =
+      msg.includes('invalid_key') || msg.includes('too_many_attempts') || msg.includes('not_found')
+    if (!answered && (await offlineJoin(roomId, pass))) {
+      $('joinBtn').removeAttribute('disabled')
+      return
+    }
     toast(
       msg.includes('invalid_key')
         ? '合言葉が違います'
@@ -175,6 +212,27 @@ async function doJoin() {
 async function openRemembered(roomId: string) {
   const s = remembered(roomId)
   if (!s) return toast('この端末には保存されていません')
+
+  // 🔴 圏外入室（§9.1）で入った部屋は**トークンを持たない**（authKey を端末に
+  // 保存しない設計）。電波が戻ったら一度だけ合言葉を聞いて、正式に入室する。
+  // ⚠ 中身は端末に在るので、聞くまでの間も見られるし、記録も足せる。
+  if (!s.token) {
+    session = s
+    const cachedNow = localState(roomId)
+    if (cachedNow) {
+      state = cachedNow
+      renderRoom()
+      renderSync(navigator.onLine ? 'pending' : 'offline')
+    }
+    if (navigator.onLine) {
+      ;($('joinRoom') as HTMLInputElement).value = roomId
+      $('offlineHint').hidden = true
+      $('rejoinHint').hidden = false
+      show('join')
+    }
+    return
+  }
+
   session = s
 
   const cached = localState(roomId)
@@ -215,6 +273,35 @@ async function openRemembered(roomId: string) {
  * （2026-09-05、実際に画面で踏んだ。記録4件が消える状態だった）。
  * 表示している件数も止まったままで、利用者は何を捨てるのか判断できなかった。
  */
+/**
+ * 入口の QR を出す・しまう。
+ *
+ * ⚠ 載せるのは入口（版・反復回数・salt）だけで、**部屋の中身は載せない**。
+ * 中身まで載せると 6人3件の部屋で101モジュールになり、他端末の画面越しには
+ * 読めなくなる（実測・設計 §9.1）。入口だけなら37モジュール。
+ */
+async function toggleQr() {
+  const box = $('qr')
+  if (!box.hidden) {
+    box.hidden = true
+    $('qrHint').hidden = true
+    $('showQr').textContent = 'QRを出す'
+    return
+  }
+  if (!entry) return
+  const { qrSvg } = await qrModule()
+  const url = entryUrl(shareOrigin(), entry.roomId, entry)
+  const { svg, modules } = qrSvg(url)
+  box.innerHTML = svg
+  // カメラで読めない相手には、この URL を送って渡す（合言葉は別経路のまま）
+  box.dataset.url = url
+  box.hidden = false
+  $('qrHint').hidden = false
+  $('showQr').textContent = 'QRをしまう'
+  // ⚠ 密度は端末で読めるかを左右する。開発中に気づけるよう残す
+  if (modules > 85) console.warn(`QR が密です（${modules} モジュール）`)
+}
+
 /**
  * 同じ1件を双方が別々に直した時だけ出す。**1件ずつ選ばせる。**
  *
@@ -602,6 +689,8 @@ function startEdit(id: string) {
 function cancelEdit() {
   editingId = null
   formParts = null
+  // ⚠ カテゴリも戻す。戻さないと、直前に直した記録の種別が次の記録に引き継がれる
+  ;($('category') as HTMLSelectElement).selectedIndex = 0
   ;($('description') as HTMLInputElement).value = ''
   ;($('amount') as HTMLInputElement).value = ''
   $('saveBookingBtn').textContent = '記録する'
@@ -694,6 +783,9 @@ document.addEventListener('click', (e) => {
     void navigator.clipboard.writeText($('shownUrl').textContent ?? '')
     toast('リンクをコピーしました（合言葉は別に伝えてください）')
   }
+  if (el.id === 'showQr') {
+    void toggleQr()
+  }
   if (el.id === 'sayPass') {
     // 読み上げる人のために大きくするだけ。合言葉を音声で送るわけではない
     const box = $('shownPass')
@@ -759,6 +851,50 @@ document.addEventListener('change', (e) => {
 })
 
 // 電波が戻ったら、溜まっている変更を自動で送る（利用者に再操作させない）
+/**
+ * 圏外入室（設計 §9.1）。**サーバーに一度も触れずに部屋へ入る。**
+ *
+ * URL のフラグメントに入口券（版・反復回数・salt）が付いていれば、
+ * 合言葉だけで鍵を作れる。中身は入っていないので**空の部屋として始まり**、
+ * 電波が戻った時に3方向マージで相手の記録と合流する。
+ *
+ * ⚠ 土台は「空の部屋」に置く。これは便宜ではなく**実際に真の共通祖先**
+ * （入った人は何も持っていなかった）。だから双方の追加が全部残る。
+ *
+ * ⚠ `authKey` は端末に保存しない（設計 §9.1）。最初の入室が通るまで
+ * 記憶の中だけに置く＝盗まれた端末でできることを広げない。
+ */
+async function offlineJoin(roomId: string, passphrase: string): Promise<boolean> {
+  const e = entryFromHash(location.hash)
+  if (!e) return false
+  try {
+    // ⚠ 静的 import であること。ここを遅延にすると **圏外で読み込めない**
+    // （2026-09-06、実際にそれで入室に失敗した）
+    const { encKeyBits } = await deriveKeys(passphrase, e.salt, e.iterations, e.kdfVersion)
+    // ⚠ ここでは合言葉の正しさを確かめられない（照合する物が手元に無い）。
+    // 間違っていれば、電波が戻って最初に同期しようとした時に分かる
+    session = { roomId, token: '', encKeyBits }
+    const empty = emptyRoomForEntry()
+    state = empty
+    adoptAsBase(roomId, empty)
+    remember(session, '')
+    show('room')
+    renderRoom()
+    renderSync('offline')
+    toast('圏外で入りました。電波が戻ると、相手の記録と合流します')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 入口券が付いている時だけ、圏外でも入れることを画面で知らせる */
+function offerOfflineJoin(roomId: string) {
+  if (!entryFromHash(location.hash)) return
+  $('offlineHint').hidden = false
+  $('offlineHint').dataset.room = roomId
+}
+
 addEventListener('online', () => {
   if (session && isDirty(session.roomId)) void push(session, clientId).then(renderSync)
 })
@@ -770,6 +906,8 @@ if (m) {
   if (saved) void openRemembered(m[1])
   else {
     ;($('joinRoom') as HTMLInputElement).value = m[1]
+    // 圏外入室券（`#k=`）が付いていれば、通信せずに入れると案内する
+    offerOfflineJoin(m[1])
     show('join')
   }
 } else {

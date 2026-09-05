@@ -8,9 +8,15 @@ import {
   inflate,
   ticketUrl,
   ticketFromHash,
-  fitsQr,
-  MAX_TICKET_BYTES,
+  fitsFile,
 } from '../src/client/ticket'
+import {
+  encodeEntry,
+  decodeEntry,
+  entryUrl,
+  entryFromHash,
+  emptyRoomForEntry,
+} from '../src/client/entry'
 import type { RoomState } from '../src/client/api'
 
 const uuid = () => crypto.randomUUID()
@@ -116,20 +122,48 @@ describe('平文の圧縮（暗号化の前に縮める）', () => {
   })
 })
 
-describe('QR に入るかの判定', () => {
-  const mkTicket = (ciphertextBytes: number) => ({
-    salt: 'A'.repeat(24),
-    iterations: 600_000,
-    kdfVersion: 2,
-    iv: 'B'.repeat(16),
-    ciphertext: 'C'.repeat(ciphertextBytes),
+describe('ファイル渡しの上限', () => {
+  const mkTicket = (n: number) => ({
+    salt: 'A'.repeat(24), iterations: 600_000, kdfVersion: 2,
+    iv: 'B'.repeat(16), ciphertext: 'C'.repeat(n),
+  })
+  it('普通の部屋は収まる', () => expect(fitsFile(mkTicket(50_000))).toBe(true))
+  it('サーバー上限を超える大きさは弾く', () => expect(fitsFile(mkTicket(300_000))).toBe(false))
+})
+
+/**
+ * 🔴 QR の主経路。**中身を載せない**ので小さく、実機で読める。
+ * 入った人の土台は「空の部屋」＝真の共通祖先なので、3方向マージが正しく効く。
+ */
+describe('入口だけの券', () => {
+  const e = { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iterations: 600_000, kdfVersion: 2 }
+
+  it('往復して一致する', () => {
+    const back = decodeEntry(encodeEntry(e))!
+    expect(back).toEqual(e)
   })
 
-  it('小さい部屋は入る', () => {
-    expect(fitsQr(mkTicket(600), 'https://michizure.example', 'ABCD1234EFGH5678')).toBe(true)
+  it('中身（暗号文）を含まない', () => {
+    expect(encodeEntry(e).split('.')).toHaveLength(3)
+    expect(encodeEntry(e)).not.toContain('=')
   })
 
-  it('大きい部屋は入らない（ファイル渡しへ落とす）', () => {
-    expect(fitsQr(mkTicket(MAX_TICKET_BYTES + 100), 'https://michizure.example', 'ABCD1234EFGH5678')).toBe(false)
+  it('URL のフラグメントから取り出せる', () => {
+    const url = entryUrl('https://michizure.example', 'ABCD1234EFGH5678', e)
+    expect(url).toContain('#k=')
+    expect(entryFromHash(new URL(url).hash)).toEqual(e)
+  })
+
+  it('QR に載せても十分小さい（実測の目安 81 B 前後）', () => {
+    const url = entryUrl('https://michizure.waiteu.dev', 'ABCD1234EFGH5678', e)
+    expect(new TextEncoder().encode(url).length).toBeLessThan(120)
+  })
+
+  it('壊れた文字列は null', () => {
+    for (const bad of ['', 'a.b', 'x.600000.abc', '2.600000']) expect(decodeEntry(bad)).toBeNull()
+  })
+
+  it('入った直後の土台は空の部屋', () => {
+    expect(emptyRoomForEntry()).toEqual({ name: '', startDate: null, endDate: null, members: [], bookings: [] })
   })
 })

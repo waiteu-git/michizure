@@ -1,4 +1,5 @@
 import type { RoomState } from './api.ts'
+import { toUrlSafe, fromUrlSafe } from './entry.ts'
 import { sealBytes, openBytes } from '../box.ts'
 import { deriveKeys } from '../keys.ts'
 
@@ -14,13 +15,10 @@ import { deriveKeys } from '../keys.ts'
  */
 
 /**
- * QR に収める券の上限（設計 §9.1）。QR v25・誤り訂正 M が約1,269バイト。
- *
- * ⚠ **これは机上の値**。実際に「向かいの席の端末の画面を読めるか」は
- * 画面の明るさ・大きさ・手ぶれで決まる。**実機2台での確認が要る**（人間の手）。
- * 入らない部屋はファイル渡しへ落とすので、外しても壊れはしない。
+ * ファイル渡し（中身入りの券）の上限。QR ではなくファイルなので余裕がある。
+ * サーバー側の暗号文上限（設計 §7.4 の 256KB）より小さければよい。
  */
-export const MAX_TICKET_BYTES = 1269
+export const MAX_FILE_TICKET_BYTES = 200_000
 
 export type Ticket = {
   salt: string
@@ -128,18 +126,6 @@ export async function inflate(bytes: Uint8Array<ArrayBuffer>): Promise<RoomState
   return expandState(JSON.parse(new TextDecoder().decode(json)) as Compact)
 }
 
-/**
- * base64 を URL に置ける形へ。`+/=` はフラグメントでも扱いが揺れるので避ける。
- */
-function toUrlSafe(b64: string): string {
-  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function fromUrlSafe(s: string): string {
-  const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
-  return b64 + '='.repeat((4 - (b64.length % 4)) % 4)
-}
-
 /** 区切りは `.`——base64url に現れない文字なので、分解が曖昧にならない */
 export function encodeTicket(t: Ticket): string {
   return [
@@ -178,9 +164,9 @@ export function ticketUrl(origin: string, roomId: string, t: Ticket): string {
   return `${origin}/r/${roomId}#t=${encodeTicket(t)}`
 }
 
-/** この券は QR に収まるか。収まらなければ呼び出し側がファイル渡しへ落とす */
-export function fitsQr(t: Ticket, origin: string, roomId: string): boolean {
-  return new TextEncoder().encode(ticketUrl(origin, roomId, t)).length <= MAX_TICKET_BYTES
+/** 中身入りの券がファイルとして扱える大きさか（QR には載せない） */
+export function fitsFile(t: Ticket): boolean {
+  return ticketBytes(t) <= MAX_FILE_TICKET_BYTES
 }
 
 /** URL のフラグメントから券を取り出す。無ければ null */
@@ -215,3 +201,5 @@ export async function openTicket(t: Ticket, passphrase: string): Promise<RoomSta
   const { encKeyBits } = await deriveKeys(passphrase, t.salt, t.iterations, t.kdfVersion)
   return inflate(await openBytes(encKeyBits, t.ciphertext, t.iv))
 }
+
+
