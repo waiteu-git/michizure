@@ -65,7 +65,6 @@ const count = (name) => (stats[name] = (stats[name] ?? 0) + 1)
 
 // --- 単語単体で判定できる条件 ---
 let pool = source.filter((w) => {
-  if (rejected.has(w)) return count('人手の工程で落とした'), false
   if (!HIRAGANA.test(w)) return count('ひらがな以外を含む'), false
   if (w.includes('ー')) return count('長音記号を含む'), false
   if (w.length < 3 || w.length > 5) return count('文字数が3〜5の外'), false
@@ -109,10 +108,43 @@ for (const w of pool) {
 // ⚠ 「短い語を優先」は採らない。打鍵は軽くなるが、**口頭では長い語のほうが聞き分けやすい**
 // （冗長性が高い）ので、短さを優先する根拠が無い。どちらに寄せる証拠も無いので、
 // 全体から等間隔に取って**素材の語長分布をそのまま保つ**。品質の選別は人手の工程で行う。
+// 🔴 **選抜は不採用語を適用する【前】に行う。**
+// 以前は不採用語をプール段階で落としていたが、そうすると accepted.length が変わり
+// stride が変わり、**1語落としただけで選抜全体が引き直された**
+// （実測 2026-09-05: 「たいほ」1語で 254語、チェックリストが名指しする4語で 483語が入れ替わる）。
+// それでは人手のレビューが成立しない＝**見て通した語が消え、見ていない語が入る**。
+// ⇒ 選抜は固定し、不採用語だけを穴埋めで置き換える。**1語落とせば1語だけ入れ替わる。**
 const stride = accepted.length / TARGET
 const selectedIdx = new Set(Array.from({ length: TARGET }, (_, i) => Math.floor(i * stride)))
-const selected = accepted.filter((_, i) => selectedIdx.has(i))
-const spare = accepted.filter((_, i) => !selectedIdx.has(i))
+const basePicked = accepted.map((w, i) => ({ w, i })).filter(({ i }) => selectedIdx.has(i))
+// 予備からも不採用語は除く（落とした語が穴埋めで戻ってきたら意味がない）
+const baseSpare = accepted
+  .map((w, i) => ({ w, i }))
+  .filter(({ i }) => !selectedIdx.has(i))
+  .filter(({ w }) => !rejected.has(w))
+
+// 穴埋めは「その穴に一番近い予備」を取る。等間隔の分布を崩さないため
+const usedSpare = new Set()
+const selected = basePicked.map(({ w, i }) => {
+  if (!rejected.has(w)) return w
+  count('人手の工程で落とした')
+  let best = null
+  for (const cand of baseSpare) {
+    if (usedSpare.has(cand.i)) continue
+    if (best === null || Math.abs(cand.i - i) < Math.abs(best.i - i)) best = cand
+  }
+  if (best === null) {
+    throw new Error(`予備が尽きた。不採用語が多すぎる（${rejected.size}語）`)
+  }
+  usedSpare.add(best.i)
+  return best.w
+})
+const spare = baseSpare.filter(({ i }) => !usedSpare.has(i)).map(({ w }) => w)
+
+// ⚠ 既知のトレードオフ: 不採用語はプール段階では落とさないので、
+// その語が押さえた接頭辞・音韻の枠は空かない＝同じ枠の別の語は候補に戻らない。
+// 予備は約1,000語あり、失うのは不採用語と同数（数十語規模）なので実害は小さい。
+// **安定性（レビューが成立すること）を優先する。**
 
 writeFileSync(join(root, 'wordlist/michizure-ja-1024.txt'), selected.join('\n') + '\n')
 
@@ -138,7 +170,13 @@ writeFileSync(
 2. **馴染みのない語**（読めない・意味が浮かばない語は、口頭で伝わらない）
 
 落とす語には行頭に \`x\` を付けて、\`wordlist/rejected.txt\` に書き出してください。
-再生成すると予備（下記）から自動で補充されます。
+再生成すると予備から自動で補充されます。**1語落とせば1語だけ入れ替わります**
+（落とした語の位置に一番近い予備が入る）。**それ以外の語は動きません**＝
+一度通した語をもう一度見直す必要はなく、レビューは途中で中断して再開できます。
+
+> ⚠ 2026-09-05 まではそうではありませんでした。不採用語をプール段階で落としていたため
+> 選抜が引き直され、**1語落とすと254語、4語で483語が入れ替わっていました**
+> （＝見て通した語が消え、見ていない語が入る）。監査で発見して修正済み。
 
 - 採用: **${selected.length}語**（${byLen(selected)}）
 - 予備: ${spare.length}語（採用が減ったときの補充元）

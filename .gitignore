@@ -4,7 +4,11 @@ node_modules/
 # 追跡しない（`npm run typecheck` が毎回生成し直す）
 worker-configuration.d.ts
 dist/
-.dev.vars
+# ⚠ .dev.vars は【意図的に追跡する】。値が公開の既定値だからで、
+# これが無いとクローンした人の `npm test` / `npm run dev` が動かない。
+# 本番の鍵は必ず `wrangler secret put`。ここに実鍵を書くと pretest が落ちる
+# （scripts/check-privacy-config.mjs が既定値であることを検査する）。
+!.dev.vars
 *.log
 .DS_Store
 

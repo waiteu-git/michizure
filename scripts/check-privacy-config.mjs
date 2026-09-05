@@ -1,7 +1,7 @@
 // npm test の前に自動で走る（package.json の pretest）。
 // wrangler.toml の privacy 上の不変条件を守る。設定は消えても誰も気づかないため、
 // 「消えたらテストが落ちる」形にしておく。
-import { readFileSync, globSync } from 'node:fs'
+import { readFileSync, globSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -29,21 +29,38 @@ if (/\[observability\][\s\S]*?enabled\s*=\s*true/.test(toml)) {
   failures.push('[observability] enabled = true になっている。確認が終わったら false に戻すこと')
 }
 
-// 2) 本番のトークン署名鍵が [vars] に平文で入っていないこと。
-//    [vars] の値は wrangler types の生成物にもそのまま埋め込まれる。
-//    ⚠ 行頭・二重引用符に限定すると、インデントや ' での記述をすり抜ける
+// 2) トークン署名鍵の置き場所。**2つを別々に検査する。**
+//
+//    🔴 (2-a) wrangler.toml に TOKEN_SECRET が【無い】こと。
+//    [vars] に書くと deploy 時に同名のリモートシークレットを置き換えるため、
+//    `wrangler secret put` で入れた本番鍵が開発用の値で上書きされる
+//    （wrangler 4.120.0 の checkRemoteSecretsOverride で実測。2026-09-05）。
+//    ⚠ 以前ここは「wrangler.toml に在ること」を要求していた＝この事故を強制していた。
 const devSecret = 'dev-only-secret-do-not-use-in-production'
-const tokenSecret = toml.match(/\bTOKEN_SECRET\s*=\s*(?:"([^"]*)"|'([^']*)')/)
-if (tokenSecret) {
-  const value = tokenSecret[1] ?? tokenSecret[2]
-  if (value !== devSecret) {
+const tomlSecret = toml.match(/\bTOKEN_SECRET\s*=\s*(?:"([^"]*)"|'([^']*)')/)
+if (tomlSecret) {
+  failures.push(
+    'wrangler.toml に TOKEN_SECRET が書かれている。deploy 時に本番のシークレットを' +
+      '置き換えてしまう（誰でもトークンを偽造できる状態になる）。値は .dev.vars へ移すこと',
+  )
+}
+
+//    (2-b) .dev.vars の TOKEN_SECRET が開発用の既定値のままであること。
+//    ここに本番の鍵を書くと、コミットされて履歴に残る。
+const devVarsPath = join(root, '.dev.vars')
+if (!existsSync(devVarsPath)) {
+  failures.push('.dev.vars が無い（開発・テスト用の TOKEN_SECRET の置き場所。検査が空振りしている）')
+} else {
+  const devVars = readFileSync(devVarsPath, 'utf8')
+  const m = devVars.match(/^\s*TOKEN_SECRET\s*=\s*(.*)$/m)
+  if (!m) {
+    failures.push('.dev.vars に TOKEN_SECRET が無い（検査が空振りしている）')
+  } else if (m[1].trim().replace(/^["']|["']$/g, '') !== devSecret) {
     failures.push(
-      '[vars] の TOKEN_SECRET が開発用の既定値から変わっている。' +
-        '本番の鍵は wrangler secret put TOKEN_SECRET で設定すること（wrangler.toml に書かない）',
+      '.dev.vars の TOKEN_SECRET が開発用の既定値から変わっている。' +
+        '本番の鍵は wrangler secret put TOKEN_SECRET で設定すること（ファイルに書かない）',
     )
   }
-} else {
-  failures.push('wrangler.toml に TOKEN_SECRET の記述が見当たらない（検査が空振りしている）')
 }
 
 // 3) IP を含むヘッダを読むコードが入り込んでいないこと。

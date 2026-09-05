@@ -24,10 +24,14 @@ cpu_ms = 50
 [observability]
 enabled = false
 
-# 開発専用。本番は `wrangler secret put TOKEN_SECRET` で上書きすること。
-# この値が本番で使われるとアクセストークンを誰でも偽造できる
-[vars]
-TOKEN_SECRET = "dev-only-secret-do-not-use-in-production"
+# 🔴 TOKEN_SECRET を [vars] に書いてはいけない（2026-09-05 の監査で判明）。
+# [vars] の値は deploy 時に【同名のリモートシークレットを置き換える】ため、
+# `wrangler secret put TOKEN_SECRET` で本番鍵を入れた後に deploy すると
+# 本番が開発用の値で上書きされる（wrangler 4.120.0 の
+# checkRemoteSecretsOverride で確認。警告は出るが既定で続行しうる）。
+# ⇒ 開発・テスト用の値は .dev.vars に置く（deploy に含まれない）。
+# 本番は `wrangler secret put TOKEN_SECRET` のみ。
+# scripts/check-privacy-config.mjs が両方を検査する。
 
 # 静的配信。パスに一致するファイルがあればそれを返し、無ければ Worker が処理する
 # ＝ /api/* は Worker、それ以外は public/ の中身
