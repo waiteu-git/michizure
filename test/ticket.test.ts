@@ -1,0 +1,135 @@
+import { describe, it, expect } from 'vitest'
+import {
+  encodeTicket,
+  decodeTicket,
+  compactState,
+  expandState,
+  deflate,
+  inflate,
+  ticketUrl,
+  ticketFromHash,
+  fitsQr,
+  MAX_TICKET_BYTES,
+} from '../src/client/ticket'
+import type { RoomState } from '../src/client/api'
+
+const uuid = () => crypto.randomUUID()
+
+function room(bookingCount: number): RoomState {
+  const members = ['わいてう', 'たなか', 'さとう', 'すずき', 'やまだ', 'たかはし'].map((name) => ({
+    id: uuid(),
+    name,
+  }))
+  return {
+    name: '沖縄3泊4日',
+    startDate: '2026-09-20',
+    endDate: '2026-09-23',
+    members,
+    bookings: Array.from({ length: bookingCount }, (_, i) => ({
+      id: uuid(),
+      category: ['宿泊', '交通', '食費', 'その他'][i % 4],
+      description: ['ホテル1泊目', 'レンタカー', '居酒屋', '高速代'][i % 4],
+      payer: members[i % members.length].id,
+      amount: 1000 + i * 137,
+      participants: members.map((m) => m.id),
+      paid: i % 3 === 0 ? { [members[1].id]: true } : {},
+    })),
+  }
+}
+
+describe('券の符号化', () => {
+  const t = {
+    salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+    iterations: 600_000,
+    kdfVersion: 2,
+    iv: 'BBBBBBBBBBBBBBBB',
+    ciphertext: 'abcdEFGH+/12345=',
+  }
+
+  it('往復して値が一致する', () => {
+    const back = decodeTicket(encodeTicket(t))!
+    expect(back.salt).toBe(t.salt)
+    expect(back.iv).toBe(t.iv)
+    expect(back.ciphertext).toBe(t.ciphertext)
+    expect(back.iterations).toBe(t.iterations)
+    expect(back.kdfVersion).toBe(t.kdfVersion)
+  })
+
+  it('URL に置けない文字を含まない', () => {
+    expect(encodeTicket(t)).not.toMatch(/[+/=]/)
+  })
+
+  it('壊れた文字列は null（例外にしない）', () => {
+    for (const bad of ['', 'こわれている', 'a.b.c', '1.2.3.4.5.6', 'x.600000.a.b.c']) {
+      expect(decodeTicket(bad)).toBeNull()
+    }
+  })
+
+  it('URL のフラグメントから取り出せる', () => {
+    const url = ticketUrl('https://例.test', 'ABCD1234EFGH5678', t)
+    expect(url).toContain('#t=')
+    const got = ticketFromHash(new URL(url).hash)
+    expect(got?.ciphertext).toBe(t.ciphertext)
+  })
+
+  it('券の無い URL からは null', () => {
+    expect(ticketFromHash('')).toBeNull()
+    expect(ticketFromHash('#other=1')).toBeNull()
+  })
+})
+
+describe('平文の圧縮（暗号化の前に縮める）', () => {
+  it('往復して完全に一致する', async () => {
+    const st = room(12)
+    const back = await inflate(await deflate(st))
+    expect(back).toEqual(st)
+  })
+
+  /**
+   * 🔴 予約の id を保つこと。作り直すと、電波が戻って合流した時に
+   * **同じ記録が二重になる**（3方向マージは id で同一性を見る）。
+   */
+  it('予約とメンバーの id が保たれる', async () => {
+    const st = room(5)
+    const back = await inflate(await deflate(st))
+    expect(back.bookings.map((b) => b.id)).toEqual(st.bookings.map((b) => b.id))
+    expect(back.members.map((m) => m.id)).toEqual(st.members.map((m) => m.id))
+  })
+
+  it('支払い済みのチェックが保たれる', async () => {
+    const st = room(6)
+    const back = await inflate(await deflate(st))
+    expect(back.bookings.map((b) => b.paid)).toEqual(st.bookings.map((b) => b.paid))
+  })
+
+  it('空の部屋でも壊れない', async () => {
+    const st: RoomState = { name: '新しい旅', startDate: null, endDate: null, members: [], bookings: [] }
+    expect(await inflate(await deflate(st))).toEqual(st)
+  })
+
+  it('索引化は素の JSON より十分小さい', () => {
+    const st = room(20)
+    const raw = JSON.stringify(st).length
+    const small = JSON.stringify(compactState(st)).length
+    expect(small).toBeLessThan(raw / 2)
+    expect(expandState(compactState(st))).toEqual(st)
+  })
+})
+
+describe('QR に入るかの判定', () => {
+  const mkTicket = (ciphertextBytes: number) => ({
+    salt: 'A'.repeat(24),
+    iterations: 600_000,
+    kdfVersion: 2,
+    iv: 'B'.repeat(16),
+    ciphertext: 'C'.repeat(ciphertextBytes),
+  })
+
+  it('小さい部屋は入る', () => {
+    expect(fitsQr(mkTicket(600), 'https://michizure.example', 'ABCD1234EFGH5678')).toBe(true)
+  })
+
+  it('大きい部屋は入らない（ファイル渡しへ落とす）', () => {
+    expect(fitsQr(mkTicket(MAX_TICKET_BYTES + 100), 'https://michizure.example', 'ABCD1234EFGH5678')).toBe(false)
+  })
+})
