@@ -54,7 +54,7 @@ describe('部屋の削除', () => {
     await del(room.roomId, room.authKey)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
     const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
-    expect(JSON.parse(dump)).toEqual({})
+    expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 })
 
@@ -90,7 +90,7 @@ describe('削除の抜け道', () => {
     expect(await blobStatus(room.roomId, room.token)).toBe(404)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
     const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
-    expect(JSON.parse(dump)).toEqual({})
+    expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 
   // enter だけをバックオフしても、同じ authKey を試せる経路が他にあれば意味がない

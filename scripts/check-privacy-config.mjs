@@ -19,14 +19,28 @@ const failures = []
 
 // 1) Workers Logs は新規 Worker では既定で有効。明示的に false にしていないと
 //    Cloudflare 側にログが残る（無料プランで3日）。設計 §7.5・§11
-if (!/\[observability\][\s\S]*?enabled\s*=\s*false/.test(toml)) {
+//    🔴 **[observability] の節の中だけを見る。** 以前は全文に対して
+//    `/\[observability\][\s\S]*?enabled\s*=\s*false/` を当てていたため、
+//    節から enabled を消しても、**後ろの別の節にある enabled = false を拾って通っていた**
+//    （2026-09-05 の監査が偽陰性・偽陽性の両方を実測）。
+//    節は「次の [ で始まる行」までとして切り出す。
+const obsMatch = toml.match(/^\s*\[observability\]\s*$([\s\S]*?)(?=^\s*\[|\Z)/m)
+if (!obsMatch) {
   failures.push(
-    'wrangler.toml に [observability] enabled = false がない（コメントアウトも不可）。' +
+    'wrangler.toml に [observability] の節がない（コメントアウトも不可）。' +
       '書かないと Workers Logs は既定で有効になり、ログが Cloudflare 側に保存される',
   )
-}
-if (/\[observability\][\s\S]*?enabled\s*=\s*true/.test(toml)) {
-  failures.push('[observability] enabled = true になっている。確認が終わったら false に戻すこと')
+} else {
+  const section = obsMatch[1]
+  if (!/^\s*enabled\s*=\s*false\s*$/m.test(section)) {
+    failures.push(
+      '[observability] の節に enabled = false がない。' +
+        '書かないと Workers Logs は既定で有効になり、ログが Cloudflare 側に保存される',
+    )
+  }
+  if (/^\s*enabled\s*=\s*true\s*$/m.test(section)) {
+    failures.push('[observability] enabled = true になっている。確認が終わったら false に戻すこと')
+  }
 }
 
 // 2) トークン署名鍵の置き場所。**2つを別々に検査する。**

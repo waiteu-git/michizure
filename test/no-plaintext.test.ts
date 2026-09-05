@@ -70,3 +70,23 @@ describe('サーバーは平文を持たない', () => {
     expect(text).not.toContain(SECRET_MEMBER)
   })
 })
+
+/**
+ * 🔴 この検査自身が見えているかを確かめる（陽性対照）。
+ *
+ * dumpForTest が KV を見ていなかった間、上の3つの assertion は
+ * **KV へ平文を書いても緑のまま**だった＝検査が在るのに何も守っていない状態。
+ * 「検査が陰性を返したら、その検査が今回の欠陥を捕まえられる設計かを先に問う」
+ * を、テストとして常設する。
+ */
+describe('検査そのものが効いているか', () => {
+  it('KV に書いた値が dumpForTest に現れる（現れなければ平文検査は空振り）', async () => {
+    const id = env.ROOM.idFromName('canary-room')
+    const stub = env.ROOM.get(id)
+    const dump = await runInDurableObject(stub, async (instance: any, ctx: any) => {
+      await ctx.storage.put('canary', 'ヒミツノアイコトバ')
+      return instance.dumpForTest()
+    })
+    expect(dump).toContain('ヒミツノアイコトバ')
+  })
+})

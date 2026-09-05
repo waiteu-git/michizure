@@ -275,10 +275,19 @@ export class Room extends DurableObject {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'",
       ),
     ].map((r) => r.name as string)
-    const out: Record<string, unknown[]> = {}
+    const out: Record<string, unknown> = {}
     for (const table of tables) {
       out[table] = [...this.sql().exec(`SELECT * FROM ${table}`)]
     }
+    // 🔴 **KV 側も必ず含める。** `ctx.storage.put()` の値は `_cf_KV` に入るが、
+    // そのテーブルは上の除外条件で落ちるうえ、直接 SELECT すると SQLITE_AUTH で拒否される。
+    // ⇒ SQL では原理的に見えない。`ctx.storage.list()` で取るしかない。
+    //
+    // ⚠ ここが抜けていると、この関数を使う「平文が保存されていないこと」の検査は
+    // **KV へ書かれた平文に対して常に緑を返す**（＝検査が在るのに何も守っていない）。
+    // 監査 item 20 で一度指摘され、SQL 側だけ広げて ✅ にしてしまっていた（2026-09-05 に再発見）。
+    // この DO 自身が `ctx.storage.setAlarm` 等で KV を使っているので、絵空事ではない。
+    out['_storage_kv'] = Object.fromEntries(await this.ctx.storage.list())
     return JSON.stringify(out)
   }
 

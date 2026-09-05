@@ -135,7 +135,7 @@ describe('入室', () => {
     })
     const stub = env.ROOM.get(env.ROOM.idFromName(ghost))
     const dump = await runInDurableObject(stub, async (i: Room) => i.dumpForTest())
-    expect(JSON.parse(dump)).toEqual({})
+    expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 
   it('正しい authKey でトークンを得る', async () => {

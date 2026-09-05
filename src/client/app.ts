@@ -36,6 +36,23 @@ let pendingImport: RoomState | null = null
 
 initOrigins()
 
+/**
+ * 🔴 アプリ本体をオフラインでも開けるようにする。
+ *
+ * これが無いと「電波が無くても動く」は**半分しか本当でない**＝入力した記録は
+ * localStorage に残るが、**リロードするとアプリ自体が読み込めない**。
+ * 旅先で圏外のままブラウザを閉じて開き直す、という一番ありそうな操作で詰む。
+ * （2026-09-05 の監査で発見。README のデモ手順が実在しない機能を書いていた）
+ *
+ * ⚠ 失敗しても握り潰す。Service Worker が使えない環境（古い WebView・
+ * 非セキュアコンテキスト）でアプリ本体が起動しなくなる方が悪い。
+ */
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}
+
 const $ = (id: string) => document.getElementById(id)!
 const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
@@ -480,8 +497,13 @@ function deleteBooking(id: string) {
 /** 部屋ごと消す。合言葉を保存していないので、必ず打ってもらう＝不可逆操作の関門になる */
 async function destroyRoom() {
   if (!session || !state) return
+  // ⚠ prompt() は素のテキストしか出せない。Markdown の `**` はそのまま文字として表示される。
+  // ここはアプリで唯一の不可逆操作の直前なので、記号が混ざって見えるのは最悪の場所だった
+  // （2026-09-05 の監査で発見）。強調は記号でなく、文そのもので出す。
   const pass = prompt(
-    `「${state.name}」を完全に消します。**元に戻せません。**\n続けるなら合言葉を入力してください。`,
+    `「${state.name}」を完全に消します。\n\n` +
+      `元に戻せません。サーバーは鍵を持たないので、消した内容は誰にも復元できません。\n\n` +
+      `続けるなら合言葉を入力してください。`,
   )
   if (!pass) return
   try {

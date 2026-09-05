@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parts, isDone, balances, advanced, settle } from '../src/client/settle'
+import { parts, isDone, balances, advanced, settle, sharesOf } from '../src/client/settle'
 import type { RoomState, Booking } from '../src/client/api'
 
 // 金額の計算は間違えると実害が出る。前身アプリの挙動をそのまま固定する
@@ -98,5 +98,71 @@ describe('送金の割り出し', () => {
     const bals = new Map([['a', 4500], ['b', -1500], ['c', -3000]])
     const total = settle(bals).reduce((n, t) => n + t.amount, 0)
     expect(total).toBe(4500)
+  })
+})
+
+/**
+ * 🔴 割り切れない金額。**画面に出す数字と、実行する送金が食い違ってはいけない。**
+ *
+ * 100円を3人で割ると 33.333…。以前は残高を小数のまま持ち、
+ * 集計表示が各人を独立に四捨五入（67 / -33 / -33）、送金も独立に四捨五入（33 + 33 = 66）
+ * していたため、**画面が「67円受け取る」と言い、指示どおり送金すると66円しか集まらなかった**。
+ * テストは 4500/-1500/-3000 という割り切れる例しか見ておらず、名前は保存則なのに
+ * 保存則が破れる入力を1つも含んでいなかった（2026-09-05 の監査で発見）。
+ */
+describe('割り切れない金額', () => {
+  const odd = (amount: number, id = 'x') =>
+    state([booking({ id, amount, participants: ['a', 'b', 'c'] })])
+
+  it('残高は円単位の整数になる', () => {
+    for (const [, v] of balances(odd(100))) expect(Number.isInteger(v)).toBe(true)
+  })
+
+  it('残高の合計はゼロ（お金が湧かない・消えない）', () => {
+    for (const amount of [100, 1000, 3001, 7, 1, 99999]) {
+      const sum = [...balances(odd(amount)).values()].reduce((n, v) => n + v, 0)
+      expect(sum).toBe(0)
+    }
+  })
+
+  it('受け取る額と、送金の合計が一致する', () => {
+    for (const amount of [100, 1000, 3001, 7, 1, 99999]) {
+      const bals = balances(odd(amount))
+      const owed = [...bals.values()].filter((v) => v > 0).reduce((n, v) => n + v, 0)
+      const sent = settle(bals).reduce((n, t) => n + t.amount, 0)
+      expect(sent).toBe(owed)
+    }
+  })
+
+  it('負担額の合計は金額そのものに一致する（端数が消えない）', () => {
+    // ⚠ `0 - x - y` と書く。`-(x + y)` だと両方0のとき -0 になり、+0 と一致しない
+    for (const amount of [100, 1000, 3001, 7, 1, 99999]) {
+      const bals = balances(odd(amount))
+      expect(bals.get('a')).toBe(0 - bals.get('b')! - bals.get('c')!)
+    }
+  })
+
+  it('配った負担額の合計が金額に一致する（人数と金額を総当たり）', () => {
+    for (let n = 1; n <= 8; n++) {
+      const pl = Array.from({ length: n }, (_, i) => `p${i}`)
+      for (const amount of [0, 1, 7, 100, 999, 3001, 99999, -100]) {
+        const sum = [...sharesOf(amount, pl, `b-${n}-${amount}`).values()].reduce((a, b) => a + b, 0)
+        expect(sum).toBe(Math.round(amount))
+      }
+    }
+  })
+
+  it('配り方は端末に依らない（同じ予約IDなら同じ結果）', () => {
+    const pl = ['a', 'b', 'c']
+    expect([...sharesOf(100, pl, 'same').values()]).toEqual([...sharesOf(100, pl, 'same').values()])
+  })
+
+  it('端数を負う人は予約ごとに変わる（同じ人が毎回損をしない）', () => {
+    const bearers = new Set<number>()
+    for (const id of ['b1', 'b2', 'b3', 'b4', 'b5', 'b6']) {
+      const bals = balances(odd(100, id))
+      bearers.add(Math.abs(bals.get('b')!))
+    }
+    expect(bearers.size).toBeGreaterThan(1)
   })
 })

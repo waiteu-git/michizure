@@ -32,15 +32,57 @@ export function balances(state: RoomState): Map<string, number> {
   const remaining = new Map(ids.map((id) => [id, 0]))
   for (const b of state.bookings) {
     const pl = parts(b, ids)
-    const share = b.amount / pl.length
+    const share = sharesOf(b.amount, pl, b.id)
     for (const id of pl) {
       if (id === b.payer) continue
       if (b.paid?.[id]) continue
-      remaining.set(b.payer, (remaining.get(b.payer) ?? 0) + share)
-      remaining.set(id, (remaining.get(id) ?? 0) - share)
+      const s = share.get(id)!
+      remaining.set(b.payer, (remaining.get(b.payer) ?? 0) + s)
+      remaining.set(id, (remaining.get(id) ?? 0) - s)
     }
   }
   return remaining
+}
+
+/** 文字列から安定した数を作る（端末や再読み込みで変わらないことだけが要件） */
+function stableHash(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+/**
+ * 🔴 金額を参加者へ **円単位の整数** で配る。**合計は必ず金額に一致する。**
+ *
+ * 円は割り切れない。100円を3人なら 33.333…で、これを小数のまま持ち回ると
+ * **表示と送金がそれぞれ独立に四捨五入され、食い違う**。
+ * 実際そうなっていた（2026-09-05 の監査で発見）＝集計は 67/−33/−33 と出るのに
+ * 送金は 33+33=66 で、**指示どおり払っても1円足りない**。
+ * ⇒ 端数は最初にここで配り切る。以降どこにも小数が出ないので、四捨五入も起きない。
+ *
+ * ⚠ 端数を負う人は **予約ごとにずらす**（予約IDから決める）。
+ * 常に先頭の人に寄せると、同じ人が毎回1円多く払う。
+ * 予約IDは端末間で同じなので、**誰の画面でも同じ配り方**になる（同期の前提を壊さない）。
+ */
+export function sharesOf(amount: number, participants: string[], bookingId: string): Map<string, number> {
+  const n = participants.length
+  const out = new Map(participants.map((id) => [id, 0]))
+  if (n === 0) return out
+  // 円未満は扱わない。入力欄は整数を想定しているが、過去データに小数があっても壊さない
+  const total = Math.round(amount)
+  const base = Math.trunc(total / n)
+  const rest = total - base * n // 符号は total と同じ。|rest| < n
+  for (const id of participants) out.set(id, base)
+  const step = rest > 0 ? 1 : -1
+  const start = stableHash(bookingId) % n
+  for (let k = 0; k < Math.abs(rest); k++) {
+    const id = participants[(start + k) % n]
+    out.set(id, out.get(id)! + step)
+  }
+  return out
 }
 
 /** 各メンバーの立替合計（支払った総額） */
@@ -59,7 +101,9 @@ export type Transfer = { from: string; to: string; amount: number }
  * eps=1 は「1円未満は無視する」の意味。前身と同じ値。
  */
 export function settle(bals: Map<string, number>): Transfer[] {
-  const eps = 1
+  // ⚠ 0.5 にすること。1 だと **ちょうど1円の送金が落ちる**（`a > eps` が偽になる）。
+  // 残高は整数になったので、ここで落ちてよいのは「小数の残りかす」だけ
+  const eps = 0.5
   const pays = [...bals].filter(([, v]) => v < -eps).map(([id, v]) => ({ id, bal: v }))
   const rcvs = [...bals].filter(([, v]) => v > eps).map(([id, v]) => ({ id, bal: v }))
   const out: Transfer[] = []
