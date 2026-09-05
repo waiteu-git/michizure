@@ -21,3 +21,4 @@ dist/
 public/app.js
 public/chunk-*.js
 public/sw.js
+public/index.html
