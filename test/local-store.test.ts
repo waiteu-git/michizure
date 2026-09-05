@@ -54,12 +54,24 @@ describe('外から届いた状態の取り込み', () => {
     expect(isDirty(ROOM)).toBe(true)
   })
 
-  it('双方が別々に動いたときだけ衝突', () => {
+  /**
+   * 🔴 2026-09-06 に契約が変わった。**別々に足しただけなら衝突しない。**
+   * 以前はここで 'conflict' を返し、利用者に「どちらを消すか」を聞いていた。
+   * 設計 §9 は最初から「追加は衝突しない（UUID のため）」と約束している。
+   */
+  it('双方が別々に足しただけならマージされ、両方残る', () => {
     applyRemote(ROOM, base)
     commitLocal(ROOM, withMember('a'))
+    expect(applyRemote(ROOM, withMember('b'))).toBe('merged')
+    const after = localState(ROOM)
+    expect(after?.members.map((m) => m.name).sort()).toEqual(['a', 'b'])
+    expect(isDirty(ROOM)).toBe(true) // マージ結果はまだ送っていない
+  })
+
+  it('土台が無ければマージせず、丸ごと選ばせる（捏造しない）', () => {
+    // pull/applyRemote を通していない＝base が無い状態を作る
+    commitLocal(ROOM, withMember('a'))
     expect(applyRemote(ROOM, withMember('b'))).toBe('conflict')
-    // 衝突では何も上書きしない
-    expect(localState(ROOM)?.members[0].name).toBe('a')
-    expect(isDirty(ROOM)).toBe(true)
+    expect(localState(ROOM)?.members[0].name).toBe('a') // 何も上書きしない
   })
 })

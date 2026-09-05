@@ -5,16 +5,19 @@ import {
   saveState,
   emptyState,
   type RoomState,
+  type Booking,
   type Session,
 } from './api.ts'
 import { remember, remembered, rememberedAll, forget } from './session-store.ts'
 import { balances, advanced, settle, parts, isDone, shareSummary } from './settle.ts'
+import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins } from './origins.ts'
 import {
   applyRemote,
   commitLocal,
   localState,
+  takePendingConflicts,
   isDirty,
   pull,
   push,
@@ -184,6 +187,7 @@ async function openRemembered(roomId: string) {
   try {
     const result = await pull(s)
     if (result === 'conflict') return showConflict(s)
+    if (result === 'merged') toast('相手の記録と合わせました')
     state = localState(roomId)
     renderRoom()
     renderSync(isDirty(roomId) ? 'pending' : 'synced')
@@ -211,8 +215,70 @@ async function openRemembered(roomId: string) {
  * （2026-09-05、実際に画面で踏んだ。記録4件が消える状態だった）。
  * 表示している件数も止まったままで、利用者は何を捨てるのか判断できなかった。
  */
+/**
+ * 同じ1件を双方が別々に直した時だけ出す。**1件ずつ選ばせる。**
+ *
+ * ⚠ 以前は「この端末（3人・記録5件）／他の端末（…）選ばなかったほうは消えます」と、
+ * 数だけを見せて一晩ぶんの記録を捨てさせていた。件数は中身の代わりにならない。
+ */
+function showBookingConflicts(s: import('./api.ts').Session, list: BookingConflict[]) {
+  const nameOf = (id: string) => state?.members.find((m) => m.id === id)?.name ?? '?'
+  const show = (b: Booking | null) =>
+    b
+      ? `${esc(b.category)} ${esc(b.description)} ${yen(b.amount)}円<br>
+         <span class="muted">${esc(nameOf(b.payer))} が立替 ／ ${b.participants.length}人で割る</span>`
+      : '<span class="muted">（消された）</span>'
+
+  $('conflict').innerHTML =
+    `<div class="warn"><b>同じ記録を、両方の端末で別々に直しました。</b>
+       ${list.length}件あります。1件ずつ選んでください。</div>` +
+    list
+      .map(
+        (c, i) => `<div class="card">
+        <div class="row"><div>${show(c.mine)}</div>
+          <button data-cf="mine" data-i="${i}">この端末を残す</button></div>
+        <div class="row"><div>${show(c.theirs)}</div>
+          <button class="ghost" data-cf="theirs" data-i="${i}">他の端末を残す</button></div>
+      </div>`,
+      )
+      .join('')
+  $('conflict').hidden = false
+
+  const chosen = new Map<number, Booking | null>()
+  $('conflict').onclick = (e) => {
+    const el = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null
+    if (!el?.dataset.cf) return
+    const i = Number(el.dataset.i)
+    chosen.set(i, el.dataset.cf === 'mine' ? list[i].mine : list[i].theirs)
+    el.closest('.card')?.classList.add('done')
+    if (chosen.size < list.length) return
+
+    // 全部選び終えた。選ばれた版を今のローカルへ入れて送る
+    const local = localState(s.roomId)
+    if (!local) return
+    for (const [i, b] of chosen) {
+      const id = (list[i].mine ?? list[i].theirs)!.id
+      const at = local.bookings.findIndex((x) => x.id === id)
+      if (b === null) { if (at >= 0) local.bookings.splice(at, 1) }
+      else if (at >= 0) local.bookings[at] = b
+      else local.bookings.push(b)
+    }
+    resolveKeepMine(s.roomId, local)
+    state = local
+    $('conflict').hidden = true
+    renderRoom()
+    void push(s, clientId).then(renderSync)
+  }
+}
+
 async function showConflict(s: import('./api.ts').Session) {
   renderSync('conflict')
+
+  // 🔴 件単位で解けた分は既にマージ済み。ここへ来るのは
+  // **同じ1件を双方が別々に直した**時だけ。丸ごと選ばせるのは土台が無い時に限る。
+  const perBooking = takePendingConflicts()
+  if (perBooking.length) return showBookingConflicts(s, perBooking)
+
   const count = (x: RoomState) => `${x.members.length}人・記録${x.bookings.length}件`
   const sides = await conflictSides(s)
   $('conflict').innerHTML = `
@@ -297,6 +363,14 @@ function startLive() {
         // 'ahead' ＝相手は動いていない。取り込むものは無いが、ローカルの変更も捨てない。
         // ここで state を remote に差し替えると、**入力したばかりの記録が画面から消える**
         if (result === 'ahead') return void push(s, clientId).then(renderSync)
+        // 'merged' ＝双方の追加が黙って併合された。**利用者に聞くことは何も無い。**
+        // 画面はマージ結果（＝ローカル）を映し、送り返す
+        if (result === 'merged') {
+          state = localState(s.roomId)
+          renderRoom()
+          toast('相手の記録と合わせました')
+          return void push(s, clientId).then(renderSync)
+        }
         state = remote
         renderRoom()
         renderSync('synced')
