@@ -16,7 +16,7 @@
 # Michizure
 
 **Splitting trip costs, for the trip you are actually on.**
-No accounts. Works with no signal. The server stores ciphertext it cannot read.
+No accounts. Works with no signal. The server stores only ciphertext and thin metadata.
 
 ## The problem is not the arithmetic
 
@@ -26,6 +26,16 @@ Dividing a restaurant bill is easy. What breaks on an actual trip is everything 
   a bad roaming plan. You note "¥4,200, Sato paid" *then*, or you never note it.
 - **Asking five friends to sign up ends the conversation.** By the time everyone has made an
   account, someone has given up and you are back to a group chat and a notes app.
+
+## Demo
+
+<!-- ⚠ DRAFT PLACEHOLDERS — must be filled before publication. Do not ship this section as-is. -->
+
+**Video:** _TODO: demo video link_
+**Screenshots:** _TODO: 1–2 images — (a) recording an expense offline, (b) the settlement view_
+
+A 60-second walkthrough: create a room, share the URL and the passphrase separately, add an
+expense with the network off, reload, watch it sync when the network returns.
 
 ## What this is not
 
@@ -89,21 +99,6 @@ with the room, so changing the defaults later cannot lock anyone out of a room c
 **The API origin is read from a `<meta>` tag, not baked in at build time.** You can open the shipped
 artifact and see where it talks to. A build-time constant would be invisible.
 
-## Measured numbers
-
-| | |
-|---|---|
-| **First load** | **10,864 B** gzipped — HTML 3,416 + app 6,018 + shared crypto/state core 1,430 |
-| Loaded only when creating a room | 4,556 B (word list + passphrase generation) |
-| Loaded only when importing old data | 1,021 B |
-| Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests | **112** |
-| Room auto-deletion | 365 days after last access |
-| Ciphertext ceiling enforced by the server | 256 KiB |
-
-The KDF timing is **one device**. It is fast enough that no per-device tuning was needed, but it is
-not a claim about phones in general.
-
 ## Monetization — ⚠ DESIGNED, NOT BUILT
 
 **RevenueCat is not integrated.** Only the dependency is installed; no purchase flow, no
@@ -125,6 +120,43 @@ server to behave differently for a paying user is excluded by construction, not 
 
 The part worth building carefully is **entitlement while offline**: an app designed to work with no
 signal must decide what a paying user sees when RevenueCat cannot be reached.
+
+## Measured numbers
+
+| | |
+|---|---|
+| **First load** | **10,864 B** gzipped — HTML 3,416 + app 6,018 + shared crypto/state core 1,430 |
+| Loaded only when creating a room | 4,556 B (word list + passphrase generation) |
+| Loaded only when importing old data | 1,021 B |
+| Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
+| Tests | **112** |
+| Room auto-deletion | 365 days after last access |
+| Ciphertext ceiling enforced by the server | 256 KiB |
+
+The KDF timing is **one device**. It is fast enough that no per-device tuning was needed, but it is
+not a claim about phones in general.
+
+## Run locally
+
+Requires Node and a Cloudflare Workers toolchain (`wrangler`, installed as a dev dependency).
+
+```bash
+npm install
+npm run dev      # builds the client bundle, then starts wrangler dev
+```
+
+`npm run dev` prints the local URL. Open it, create a room, and the app is fully usable
+offline from that point — nothing else needs to be running.
+
+```bash
+npm test         # 112 tests; the pretest step also checks the privacy config and the word list
+npm run typecheck
+npm run build:wordlist   # regenerates the word list and its bundled copy from one source pass
+```
+
+The token-signing secret in `wrangler.toml` under `[vars]` is a **development value only**.
+A deployment sets the real one with `wrangler secret put TOKEN_SECRET`; leaving the dev value
+in place would let anyone forge an access token.
 
 ## Limitations
 
