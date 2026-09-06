@@ -14,7 +14,21 @@ import { dirname, join } from 'node:path'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(root, 'src/index.html'), 'utf8')
 
+// 🔴 ネイティブのシェルは【別オリジン】で動くので、API の宛先を焼き込む必要がある。
+// Web 配信では空＝相対パス。シェル向けに作る時だけ MICHIZURE_API_BASE を与える。
+// ⚠ 与えた値は src/types.ts の ALLOWED_SHELL_ORIGINS と対で意味を持つ。
+// シェルの出所（capacitor://localhost / http://localhost）が許可一覧に無いと、
+// **アプリは起動するが API が全部 CORS で落ちる**（画面は出るので気づきにくい）。
+const apiBase = (process.env.MICHIZURE_API_BASE ?? '').trim().replace(/\/+$/, '')
+if (apiBase && !/^https:\/\//.test(apiBase)) {
+  throw new Error(`MICHIZURE_API_BASE は https:// で始めること: ${apiBase}`)
+}
+
 const out = src
+  .replace(
+    /(<meta name="michizure-api-base" content=")[^"]*(")/,
+    (_, a, b) => `${a}${apiBase}${b}`,
+  )
   // HTML コメント。⚠ 条件付きコメントは使っていないので単純除去でよい
   .replace(/<!--[\s\S]*?-->/g, '')
   // CSS コメント（<style> の中）
@@ -24,4 +38,7 @@ const out = src
 
 writeFileSync(join(root, 'public/index.html'), out)
 const kb = (s) => (Buffer.byteLength(s) / 1024).toFixed(1)
-console.log(`index.html を生成: ${kb(src)}KB → ${kb(out)}KB（コメント除去）`)
+console.log(
+  `index.html を生成: ${kb(src)}KB → ${kb(out)}KB（コメント除去）` +
+    (apiBase ? ` / API の宛先 ${apiBase}` : ' / API は相対パス（Web 配信）'),
+)

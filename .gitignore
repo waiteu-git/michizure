@@ -22,3 +22,20 @@ public/app.js
 public/chunk-*.js
 public/sw.js
 public/index.html
+
+# --- ネイティブのシェル（Capacitor）---
+# ⚠ ios/ と android/ の【プロジェクト定義】は追跡する（設定を手で直すため）。
+# 追跡しないのはビルド生成物と、環境ごとに変わるもの。
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/Pods/
+ios/App/build/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/

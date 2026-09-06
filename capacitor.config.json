@@ -1,0 +1,9 @@
+{
+  "appId": "dev.waiteu.michizure",
+  "appName": "Michizure",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "http",
+    "iosScheme": "capacitor"
+  }
+}

@@ -56,7 +56,18 @@ initOrigins()
  * ⚠ 失敗しても握り潰す。Service Worker が使えない環境（古い WebView・
  * 非セキュアコンテキスト）でアプリ本体が起動しなくなる方が悪い。
  */
-if ('serviceWorker' in navigator) {
+/**
+ * ⚠ **ネイティブのシェルの中では登録しない。**
+ *
+ * シェルは端末内のファイルを読むので、キャッシュする理由がそもそも無い。
+ * それだけなら無害だが、登録すると**アプリを更新しても SW が古い資産を
+ * 返し続ける**（Capacitor でよく踏まれる形）。画面は出るので気づきにくい。
+ *
+ * 判定に @capacitor/core を import しない＝そのぶんの配信量を増やさない。
+ * シェルが注入する `window.Capacitor` の有無だけを見る。
+ */
+const inNativeShell = 'Capacitor' in window || location.protocol === 'capacitor:'
+if ('serviceWorker' in navigator && !inNativeShell) {
   addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   })
