@@ -1,4 +1,4 @@
-import { loadState, saveState, type RoomState, type Session } from './api.ts'
+import { loadState, saveState, StaleError, type RoomState, type Session } from './api.ts'
 import { merge3, type BookingConflict } from './merge.ts'
 
 /**
@@ -26,6 +26,15 @@ type Local = {
    * 相手の変更を自分の追加として扱うような、静かに間違った併合が起きる。
    */
   base?: RoomState | null
+  /**
+   * 🔴 最後にサーバーで見た**版の番号**。書き込みに必ず添える。
+   *
+   * 目印（baseStamp）は中身のハッシュで、サーバーは中身を読めないので使えない。
+   * サーバーが数える番号だけが「今の版を見ているか」の共通の物差しになる。
+   * ⚠ 0 ＝「サーバーをまだ見ていない」（圏外入室の直後など）。この状態で送ると
+   * 断られるが、それが正しい——断られてから取り込めば、記録は片方も消えない。
+   */
+  rev?: number
   /** 端末にあるがサーバーへ送れていない変更があるか */
   dirty: boolean
 }
@@ -67,13 +76,28 @@ export function isDirty(roomId: string): boolean {
  * 相手の記録を空で上書きする。
  */
 export function adoptAsBase(roomId: string, state: RoomState): void {
-  write(roomId, { state, baseStamp: null, base: state, dirty: false })
+  // ⚠ 版は 0＝まだサーバーを見ていない。最初の送信は断られ、取り込んでから送り直す
+  write(roomId, { state, baseStamp: null, base: state, rev: 0, dirty: false })
+}
+
+/**
+ * サーバーから取ってきた版をそのまま土台にする（入室した直後）。
+ * ⚠ 「未送信の変更」にしないこと。取ってきたばかりの物を送り返す理由は無い。
+ */
+export function adoptRemote(roomId: string, state: RoomState, rev: number): void {
+  write(roomId, { state, baseStamp: stampOf(state), base: state, rev, dirty: false })
 }
 
 /** 変更を端末へ確定させる。**通信は待たない** */
 export function commitLocal(roomId: string, state: RoomState): void {
   const prev = read(roomId)
-  write(roomId, { state, baseStamp: prev?.baseStamp ?? null, base: prev?.base ?? null, dirty: true })
+  write(roomId, {
+    state,
+    baseStamp: prev?.baseStamp ?? null,
+    base: prev?.base ?? null,
+    rev: prev?.rev ?? 0,
+    dirty: true,
+  })
 }
 
 /**
@@ -82,32 +106,64 @@ export function commitLocal(roomId: string, state: RoomState): void {
  * 設計の非スコープに従い、自動マージはしない（利用者に選ばせる）。
  */
 export async function pull(s: Session): Promise<'adopted' | 'merged' | 'conflict' | 'unchanged'> {
-  const remote = await loadState(s)
+  const { state: remote, rev } = await loadState(s)
   const local = read(s.roomId)
   const stamp = stampOf(remote)
 
   if (!local) {
-    write(s.roomId, { state: remote, baseStamp: stamp, base: remote, dirty: false })
+    write(s.roomId, { state: remote, baseStamp: stamp, base: remote, rev, dirty: false })
     return 'adopted'
   }
-  if (stamp === local.baseStamp) return 'unchanged'
+  if (stamp === local.baseStamp) {
+    // ⚠ 中身が同じでも**版は控える**。控えないと、次の送信が古い版で断られ続け、
+    // 取り込み直しても同じ所へ戻る（送れないまま無限に往復する）
+    write(s.roomId, { ...local, rev })
+    return 'unchanged'
+  }
   if (!local.dirty) {
-    write(s.roomId, { state: remote, baseStamp: stamp, base: remote, dirty: false })
+    write(s.roomId, { state: remote, baseStamp: stamp, base: remote, rev, dirty: false })
     return 'adopted'
   }
-  return mergeInto(s.roomId, local, remote)
+  return mergeInto(s.roomId, local, remote, rev)
 }
 
-/** サーバーへ送る。失敗しても投げない（旅先では失敗が普通なので、例外にしない） */
-export async function push(s: Session, clientId = ''): Promise<SyncStatus> {
+/**
+ * サーバーへ送る。失敗しても投げない（旅先では失敗が普通なので、例外にしない）。
+ *
+ * 🔴 **断られたら取り込んでから送り直す。押し通さない。**
+ * サーバーが先に進んでいたのに上書きすると、相手の記録が黙って消える。
+ */
+export async function push(s: Session, clientId = '', tries = 2): Promise<SyncStatus> {
   const local = read(s.roomId)
   if (!local || !local.dirty) return 'synced'
   try {
-    await saveState(s, local.state, clientId)
-    // 送れた＝この版で双方が一致した。次のマージの土台はここ
-    write(s.roomId, { ...local, baseStamp: stampOf(local.state), base: local.state, dirty: false })
-    return 'synced'
-  } catch {
+    const rev = await saveState(s, local.state, clientId, local.rev ?? 0)
+    // 🔴 送っている**間に足された記録**を巻き戻さない。
+    // 以前はここで送信前の控えを丸ごと書き戻していたため、通信中に入力した分が
+    // 消えていた（サーバーは受け取っているのに端末から消えるので気づけない）。
+    const after = read(s.roomId)!
+    const moved = stampOf(after.state) !== stampOf(local.state)
+    write(s.roomId, {
+      ...after,
+      // 送れた＝この版で双方が一致した。次のマージの土台はここ
+      baseStamp: stampOf(local.state),
+      base: local.state,
+      rev,
+      dirty: moved,
+    })
+    return moved ? 'pending' : 'synced'
+  } catch (e) {
+    if (e instanceof StaleError && tries > 0) {
+      let again: Awaited<ReturnType<typeof pull>>
+      try {
+        again = await pull(s)
+      } catch {
+        return navigator.onLine ? 'pending' : 'offline'
+      }
+      // 同じ1件を双方が直していた＝利用者に選ばせる。勝手に決めない
+      if (again === 'conflict') return 'conflict'
+      return push(s, clientId, tries - 1)
+    }
     return navigator.onLine ? 'pending' : 'offline'
   }
 }
@@ -132,11 +188,15 @@ function stampOf(state: RoomState): string {
  * ⚠ **この端末に未送信の変更がある時は取り込まない**＝黙って上書きすると
  * 入力が理由も分からず消える。呼び出し側で衝突として扱う
  */
-export function applyRemote(roomId: string, remote: RoomState): 'adopted' | 'ahead' | 'merged' | 'conflict' {
+export function applyRemote(
+  roomId: string,
+  remote: RoomState,
+  rev: number,
+): 'adopted' | 'ahead' | 'merged' | 'conflict' {
   const local = read(roomId)
   const stamp = stampOf(remote)
   if (!local || !local.dirty) {
-    write(roomId, { state: remote, baseStamp: stamp, base: remote, dirty: false })
+    write(roomId, { state: remote, baseStamp: stamp, base: remote, rev, dirty: false })
     return 'adopted'
   }
 
@@ -148,31 +208,42 @@ export function applyRemote(roomId: string, remote: RoomState): 'adopted' | 'ahe
 
   // ① 中身が同じ＝自分の push が中継されて戻ってきた。送信済みとして扱う
   if (stamp === stampOf(local.state)) {
-    write(roomId, { state: local.state, baseStamp: stamp, base: local.state, dirty: false })
+    write(roomId, { state: local.state, baseStamp: stamp, base: local.state, rev, dirty: false })
     return 'adopted'
   }
   // ② 相手はこちらが編集を始めた版から動いていない＝こちらが先行しているだけ。
   //    取り込むものは無いが、ローカルの変更も捨てない
-  if (local.baseStamp !== null && stamp === local.baseStamp) return 'ahead'
+  //    ⚠ 版だけは控える（中身が同じでもサーバーの番号は進んでいる）
+  if (local.baseStamp !== null && stamp === local.baseStamp) {
+    write(roomId, { ...local, rev })
+    return 'ahead'
+  }
 
   // ③ 双方が別々に動いた。**ここで初めてマージを試みる。**
   //    追加どうしなら黙って併合され、同じ1件を双方が直した時だけ 'conflict' になる
-  return mergeInto(roomId, local, remote)
+  return mergeInto(roomId, local, remote, rev)
 }
 
 /** 衝突したときに利用者へ見せる材料 */
-export async function conflictSides(s: Session): Promise<{ mine: RoomState; theirs: RoomState }> {
-  return { mine: read(s.roomId)!.state, theirs: await loadState(s) }
+export async function conflictSides(
+  s: Session,
+): Promise<{ mine: RoomState; theirs: RoomState; rev: number }> {
+  const { state: theirs, rev } = await loadState(s)
+  return { mine: read(s.roomId)!.state, theirs, rev }
 }
 
-/** 衝突の解決＝どちらかを選ぶ。マージはしない（設計の非スコープ） */
-export function resolveKeepMine(roomId: string, state: RoomState): void {
+/**
+ * 衝突の解決＝どちらかを選ぶ。マージはしない（設計の非スコープ）。
+ * ⚠ どちらを選んでも**見た版の番号を控える**。控えないと、選んだ結果を
+ * サーバーへ送れない（古い版として断られ続ける）。
+ */
+export function resolveKeepMine(roomId: string, state: RoomState, rev: number): void {
   // ⚠ 土台は残す。共通の祖先は「自分が選んだ版」ではない
-  write(roomId, { state, baseStamp: null, base: read(roomId)?.base ?? null, dirty: true })
+  write(roomId, { state, baseStamp: null, base: read(roomId)?.base ?? null, rev, dirty: true })
 }
 
-export function resolveTakeTheirs(roomId: string, state: RoomState): void {
-  write(roomId, { state, baseStamp: stampOf(state), base: state, dirty: false })
+export function resolveTakeTheirs(roomId: string, state: RoomState, rev: number): void {
+  write(roomId, { state, baseStamp: stampOf(state), base: state, rev, dirty: false })
 }
 
 /**
@@ -188,7 +259,12 @@ export function resolveTakeTheirs(roomId: string, state: RoomState): void {
  * 'unchanged' に落ちる＝取り込むものは無く、送るだけ。
  * ⚠ これは便宜ではない。マージした時点で相手の版は**実際に見ている**。
  */
-function mergeInto(roomId: string, local: Local, remote: RoomState): 'merged' | 'conflict' {
+function mergeInto(
+  roomId: string,
+  local: Local,
+  remote: RoomState,
+  rev: number,
+): 'merged' | 'conflict' {
   if (!local.base) return 'conflict'
   const { state, conflicts } = merge3(local.base, local.state, remote)
   if (conflicts.length) {
@@ -196,7 +272,7 @@ function mergeInto(roomId: string, local: Local, remote: RoomState): 'merged' | 
     return 'conflict'
   }
   pendingConflicts = []
-  write(roomId, { state, baseStamp: stampOf(remote), base: remote, dirty: true })
+  write(roomId, { state, baseStamp: stampOf(remote), base: remote, rev, dirty: true })
   return 'merged'
 }
 

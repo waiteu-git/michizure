@@ -174,11 +174,19 @@ async function getBlob(roomId: string, token: string) {
   })
 }
 
+/**
+ * ⚠ 実物のクライアントと同じく、**今の版を見てから書く**。
+ * 版を添えない書き込みはサーバーが 409 で断る（同時に書いた相手の記録を
+ * 黙って消さないための照合。詳しくは room.ts の handlePutBlob）。
+ */
 async function putBlob(roomId: string, token: string, blob: unknown) {
+  const now = (await (await getBlob(roomId, token)).json()) as { rev?: number }
+  const body =
+    blob && typeof blob === 'object' ? { ...(blob as object), baseRev: now.rev ?? 0 } : blob
   return SELF.fetch(`https://example.com/api/rooms/${roomId}/blob`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(blob),
+    body: JSON.stringify(body),
   })
 }
 

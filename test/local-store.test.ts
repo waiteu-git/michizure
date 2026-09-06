@@ -24,11 +24,16 @@ const withMember = (n: string): RoomState => ({
 
 const ROOM = 'ROOM0000000000AA'
 
+// サーバーが数える版。書き込みのたびに1つ増える（戻り値の判定には効かないが、
+// 実物と同じ形で渡しておく＝控えそこないがあれば別のテストで露見する）
+let rev = 0
+const nextRev = () => ++rev
+
 describe('外から届いた状態の取り込み', () => {
-  beforeEach(() => mem.clear())
+  beforeEach(() => { mem.clear(); rev = 0 })
 
   it('未送信の変更が無ければ取り込む', () => {
-    expect(applyRemote(ROOM, withMember('a'))).toBe('adopted')
+    expect(applyRemote(ROOM, withMember('a'), nextRev())).toBe('adopted')
     expect(localState(ROOM)?.members).toHaveLength(1)
   })
 
@@ -40,15 +45,15 @@ describe('外から届いた状態の取り込み', () => {
   it('中身が同じなら衝突ではない（自分の push が返ってきただけ）', () => {
     commitLocal(ROOM, withMember('a'))
     expect(isDirty(ROOM)).toBe(true)
-    expect(applyRemote(ROOM, withMember('a'))).toBe('adopted')
+    expect(applyRemote(ROOM, withMember('a'), nextRev())).toBe('adopted')
     expect(isDirty(ROOM)).toBe(false) // 送信済みとして扱う
     expect(localState(ROOM)?.members).toHaveLength(1)
   })
 
   it('相手が動いていないなら衝突ではない（こちらが先行しているだけ）', () => {
-    applyRemote(ROOM, base) // baseStamp が base になる
+    applyRemote(ROOM, base, nextRev()) // baseStamp が base になる
     commitLocal(ROOM, withMember('a')) // ローカルだけ進む
-    expect(applyRemote(ROOM, base)).toBe('ahead')
+    expect(applyRemote(ROOM, base, nextRev())).toBe('ahead')
     // ⚠ ローカルの変更を捨てない
     expect(localState(ROOM)?.members).toHaveLength(1)
     expect(isDirty(ROOM)).toBe(true)
@@ -60,9 +65,9 @@ describe('外から届いた状態の取り込み', () => {
    * 設計 §9 は最初から「追加は衝突しない（UUID のため）」と約束している。
    */
   it('双方が別々に足しただけならマージされ、両方残る', () => {
-    applyRemote(ROOM, base)
+    applyRemote(ROOM, base, nextRev())
     commitLocal(ROOM, withMember('a'))
-    expect(applyRemote(ROOM, withMember('b'))).toBe('merged')
+    expect(applyRemote(ROOM, withMember('b'), nextRev())).toBe('merged')
     const after = localState(ROOM)
     expect(after?.members.map((m) => m.name).sort()).toEqual(['a', 'b'])
     expect(isDirty(ROOM)).toBe(true) // マージ結果はまだ送っていない
@@ -71,7 +76,7 @@ describe('外から届いた状態の取り込み', () => {
   it('土台が無ければマージせず、丸ごと選ばせる（捏造しない）', () => {
     // pull/applyRemote を通していない＝base が無い状態を作る
     commitLocal(ROOM, withMember('a'))
-    expect(applyRemote(ROOM, withMember('b'))).toBe('conflict')
+    expect(applyRemote(ROOM, withMember('b'), nextRev())).toBe('conflict')
     expect(localState(ROOM)?.members[0].name).toBe('a') // 何も上書きしない
   })
 })
@@ -82,20 +87,20 @@ describe('外から届いた状態の取り込み', () => {
  * 「相手の記録と合わせました」が二度出る（2026-09-06、繋ぎ直しを直した時に発生）。
  */
 describe('同じ版が二度届いた時', () => {
-  beforeEach(() => mem.clear())
+  beforeEach(() => { mem.clear(); rev = 0 })
 
   it('二度目はマージし直さない', () => {
     // 土台＝双方が一致していた版
-    expect(applyRemote(ROOM, base)).toBe('adopted')
+    expect(applyRemote(ROOM, base, nextRev())).toBe('adopted')
     // 圏外で自分が1件足した
     commitLocal(ROOM, withMember('わたし'))
     const theirs: RoomState = { ...base, members: [{ id: 'あいて', name: 'あいて' }] }
 
-    expect(applyRemote(ROOM, theirs)).toBe('merged')
+    expect(applyRemote(ROOM, theirs, nextRev())).toBe('merged')
     expect(localState(ROOM)?.members).toHaveLength(2)
 
     // 同じ版がもう一方の経路から届く
-    expect(applyRemote(ROOM, theirs)).toBe('ahead')
+    expect(applyRemote(ROOM, theirs, nextRev())).toBe('ahead')
     expect(localState(ROOM)?.members).toHaveLength(2)
   })
 })

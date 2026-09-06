@@ -17,5 +17,5 @@
   // ⚠ test/ からクライアントのモジュールを import すると、ここへ引き込まれて
   // DOM の型が無いまま検査される。**DOM を使うモジュールを触るテストは
   // 個別に除外して、client 側の include へ足す**（DOM をここへ足してはいけない）。
-  "exclude": ["src/client/**/*.ts", "test/local-store.test.ts", "test/live.test.ts"]
+  "exclude": ["src/client/**/*.ts", "test/local-store.test.ts", "test/live.test.ts", "test/push-retry.test.ts"]
 }

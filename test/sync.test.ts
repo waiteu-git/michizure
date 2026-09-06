@@ -87,11 +87,12 @@ describe('WebSocket 中継', () => {
     const room = await createRoom()
     const a = await connect(room.roomId, room.token)
     const b = await connect(room.roomId, room.token)
-    await a.next()
+    const init = await a.next()
     await b.next()
 
     const blob = { ...(await seal(room.encKeyBits, { name: '変更後' })), blobVersion: 1 }
-    a.ws.send(JSON.stringify({ type: 'update', blob }))
+    // ⚠ 見た版を添える。添えないとサーバーが断る（同時書き込みで記録が消えないため）
+    a.ws.send(JSON.stringify({ type: 'update', blob, baseRev: init.rev }))
     const received = await b.next()
     expect(received.type).toBe('update')
     expect(received.blob.ciphertext).toBe(blob.ciphertext)
@@ -106,11 +107,12 @@ describe('WebSocket 中継', () => {
     const room = await createRoom()
     const a = await connect(room.roomId, room.token)
     const b = await connect(room.roomId, room.token)
-    expect((await a.next()).type).toBe('init')
+    const init = await a.next()
+    expect(init.type).toBe('init')
     expect((await b.next()).type).toBe('init')
 
     const blob = { ...(await seal(room.encKeyBits, { name: '変更後' })), blobVersion: 1 }
-    a.ws.send(JSON.stringify({ type: 'update', blob }))
+    a.ws.send(JSON.stringify({ type: 'update', blob, baseRev: init.rev }))
 
     // b が受け取ったことをもって「中継は完了した」と確定させてから a を見る。
     // 単に待つだけだと、中継が遅いのか除外が効いたのかを区別できない
@@ -126,9 +128,9 @@ describe('WebSocket 中継', () => {
   it('update された暗号文が永続化される', async () => {
     const room = await createRoom()
     const a = await connect(room.roomId, room.token)
-    await a.next()
+    const init = await a.next()
     const blob = { ...(await seal(room.encKeyBits, { name: '永続化' })), blobVersion: 1 }
-    a.ws.send(JSON.stringify({ type: 'update', blob }))
+    a.ws.send(JSON.stringify({ type: 'update', blob, baseRev: init.rev }))
     await new Promise((r) => setTimeout(r, 200))
     a.close()
 
@@ -201,7 +203,8 @@ describe('WebSocket 中継', () => {
   it('PUT の更新が、開いている他の接続へ届く', async () => {
     const room = await createRoom()
     const b = await connect(room.roomId, room.token, 'other-device')
-    expect((await b.next()).type).toBe('init')
+    const init = await b.next()
+    expect(init.type).toBe('init')
 
     const blob = { ...(await seal(room.encKeyBits, { name: 'PUTから' })), blobVersion: 1 }
     await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
@@ -211,7 +214,7 @@ describe('WebSocket 中継', () => {
         'Content-Type': 'application/json',
         'X-Client-Id': 'writer',
       },
-      body: JSON.stringify(blob),
+      body: JSON.stringify({ ...blob, baseRev: init.rev }),
     })
 
     const msg = await b.next()
@@ -226,7 +229,8 @@ describe('WebSocket 中継', () => {
     const room = await createRoom()
     const me = await connect(room.roomId, room.token, 'me')
     const other = await connect(room.roomId, room.token, 'other')
-    expect((await me.next()).type).toBe('init')
+    const init = await me.next()
+    expect(init.type).toBe('init')
     expect((await other.next()).type).toBe('init')
 
     const blob = { ...(await seal(room.encKeyBits, { name: '自分が書いた' })), blobVersion: 1 }
@@ -237,7 +241,7 @@ describe('WebSocket 中継', () => {
         'Content-Type': 'application/json',
         'X-Client-Id': 'me',
       },
-      body: JSON.stringify(blob),
+      body: JSON.stringify({ ...blob, baseRev: init.rev }),
     })
 
     // 相手が受け取ったことで「中継は完了した」と確定させてから自分を見る。
@@ -255,5 +259,102 @@ describe('WebSocket 中継', () => {
       headers: { Upgrade: 'websocket' },
     })
     expect(res.status).toBe(401)
+  })
+})
+
+/**
+ * 🔴 **同時に書かれた時に、片方を黙って消さない。**
+ *
+ * サーバーは中身を読めないので、届いた暗号文が「今持っている版から育ったもの」か
+ * を中身では判定できない。版の番号で照合し、**今の版を見ていない書き込みを断る**。
+ * 断らずに通していたため、2台が同時に電波を取り戻すと後の1本が前の記録を
+ * 丸ごと上書きしていた（2026-09-06、2タブの実測で再現）。
+ */
+describe('版の照合', () => {
+  const blobOf = async (encKeyBits: ArrayBuffer, name: string) => ({
+    ...(await seal(encKeyBits, { name, members: [], bookings: [] })),
+    blobVersion: 1,
+  })
+  const put = (roomId: string, token: string, body: unknown) =>
+    SELF.fetch(`https://example.com/api/rooms/${roomId}/blob`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const get = async (roomId: string, token: string) =>
+    (await (
+      await SELF.fetch(`https://example.com/api/rooms/${roomId}/blob`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    ).json()) as { ciphertext: string; rev: number }
+
+  it('読み出しに版が付いてくる', async () => {
+    const room = await createRoom()
+    expect((await get(room.roomId, room.token)).rev).toBeGreaterThan(0)
+  })
+
+  it('古い版に基づく書き込みは断られ、保存済みは変わらない', async () => {
+    const room = await createRoom()
+    const before = await get(room.roomId, room.token)
+
+    // 相手が先に書いた
+    const theirs = await blobOf(room.encKeyBits, '相手が書いた')
+    expect((await put(room.roomId, room.token, { ...theirs, baseRev: before.rev })).status).toBe(200)
+
+    // こちらは古い版のまま書こうとする
+    const mine = await blobOf(room.encKeyBits, 'こちらが書いた')
+    const res = await put(room.roomId, room.token, { ...mine, baseRev: before.rev })
+    expect(res.status).toBe(409)
+    expect((await res.json()) as { error: string }).toMatchObject({ error: 'stale' })
+
+    // 🔴 相手の記録が消えていない
+    expect((await get(room.roomId, room.token)).ciphertext).toBe(theirs.ciphertext)
+  })
+
+  it('版を添えない書き込みは断る（添え忘れを黙って通さない）', async () => {
+    const room = await createRoom()
+    const blob = await blobOf(room.encKeyBits, '版なし')
+    expect((await put(room.roomId, room.token, blob)).status).toBe(409)
+  })
+
+  it('断られた側は、取り直した版で送れば通る', async () => {
+    const room = await createRoom()
+    const first = await get(room.roomId, room.token)
+    await put(room.roomId, room.token, {
+      ...(await blobOf(room.encKeyBits, '一度目')),
+      baseRev: first.rev,
+    })
+    const again = await get(room.roomId, room.token)
+    expect(again.rev).toBe(first.rev + 1)
+
+    const mine = await blobOf(room.encKeyBits, '二度目')
+    expect((await put(room.roomId, room.token, { ...mine, baseRev: again.rev })).status).toBe(200)
+    expect((await get(room.roomId, room.token)).ciphertext).toBe(mine.ciphertext)
+  })
+
+  /**
+   * ⚠ 書き込み経路は create / PUT / WS の3つ。**片面だけ守ると、
+   * そちらを通るだけで上書きが復活する。**
+   */
+  it('WebSocket からの書き込みにも同じ照合が効く', async () => {
+    const room = await createRoom()
+    const a = await connect(room.roomId, room.token)
+    const init = await a.next()
+
+    // 先に PUT で版を進めておく＝WS が握っている版はもう古い
+    const theirs = await blobOf(room.encKeyBits, 'PUT が先に書いた')
+    expect((await put(room.roomId, room.token, { ...theirs, baseRev: init.rev })).status).toBe(200)
+
+    a.ws.send(
+      JSON.stringify({
+        type: 'update',
+        blob: await blobOf(room.encKeyBits, 'WS が古い版で書く'),
+        baseRev: init.rev,
+      }),
+    )
+    await new Promise((r) => setTimeout(r, 200))
+
+    expect((await get(room.roomId, room.token)).ciphertext).toBe(theirs.ciphertext)
+    a.close()
   })
 })

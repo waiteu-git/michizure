@@ -20,6 +20,7 @@ import { KDF_VERSION } from '../types.ts'
 import {
   applyRemote,
   commitLocal,
+  adoptRemote,
   localState,
   takePendingConflicts,
   adoptAsBase,
@@ -238,9 +239,12 @@ async function doJoin() {
       renderRoom()
       if (isDirty(roomId)) void push(session, clientId).then(renderSync)
     } else {
-      state = await loadState(session)
+      const loaded = await loadState(session)
+      state = loaded.state
       remember(session, state.name)
-      commitLocal(roomId, state)
+      // ⚠ 取ってきたばかりの版を「未送信の変更」にしない。
+      // 版の番号もここで控える（控えないと最初の送信が必ず断られる）
+      adoptRemote(roomId, state, loaded.rev)
       renderSync('synced')
       renderRoom()
     }
@@ -420,7 +424,7 @@ async function toggleQr() {
  * ⚠ 以前は「この端末（3人・記録5件）／他の端末（…）選ばなかったほうは消えます」と、
  * 数だけを見せて一晩ぶんの記録を捨てさせていた。件数は中身の代わりにならない。
  */
-function showBookingConflicts(s: import('./api.ts').Session, list: BookingConflict[]) {
+function showBookingConflicts(s: import('./api.ts').Session, list: BookingConflict[], rev: number) {
   const nameOf = (id: string) => state?.members.find((m) => m.id === id)?.name ?? '?'
   const show = (b: Booking | null) =>
     b
@@ -462,7 +466,7 @@ function showBookingConflicts(s: import('./api.ts').Session, list: BookingConfli
       else if (at >= 0) local.bookings[at] = b
       else local.bookings.push(b)
     }
-    resolveKeepMine(s.roomId, local)
+    resolveKeepMine(s.roomId, local, rev)
     state = local
     $('conflict').hidden = true
     renderRoom()
@@ -476,10 +480,11 @@ async function showConflict(s: import('./api.ts').Session) {
   // 🔴 件単位で解けた分は既にマージ済み。ここへ来るのは
   // **同じ1件を双方が別々に直した**時だけ。丸ごと選ばせるのは土台が無い時に限る。
   const perBooking = takePendingConflicts()
-  if (perBooking.length) return showBookingConflicts(s, perBooking)
+  // ⚠ サーバーで見た版を持って解決へ渡す。持たないと、選んだ結果を送れない
+  const sides = await conflictSides(s)
+  if (perBooking.length) return showBookingConflicts(s, perBooking, sides.rev)
 
   const count = (x: RoomState) => `${x.members.length}人・記録${x.bookings.length}件`
-  const sides = await conflictSides(s)
   $('conflict').innerHTML = `
     <div class="warn">
       <b>この端末の変更と、他の端末の変更が食い違っています。</b>
@@ -494,7 +499,7 @@ async function showConflict(s: import('./api.ts').Session) {
     // 押した時点のローカル＝パネルを見ている間に足した記録も残る
     const mine = localState(s.roomId)
     if (!mine) return
-    resolveKeepMine(s.roomId, mine)
+    resolveKeepMine(s.roomId, mine, sides.rev)
     state = mine
     $('conflict').hidden = true
     renderRoom()
@@ -502,13 +507,14 @@ async function showConflict(s: import('./api.ts').Session) {
   }
   $('takeTheirs').onclick = async () => {
     // 押した時点のサーバー側を取り直す。表示していた版はもう古いかもしれない
-    let theirs: RoomState
+    let now: Awaited<ReturnType<typeof conflictSides>>
     try {
-      theirs = (await conflictSides(s)).theirs
+      now = await conflictSides(s)
     } catch {
       return toast('つながりません。もう一度試してください')
     }
-    resolveTakeTheirs(s.roomId, theirs)
+    const theirs = now.theirs
+    resolveTakeTheirs(s.roomId, theirs, now.rev)
     state = theirs
     $('conflict').hidden = true
     renderRoom()
@@ -552,12 +558,12 @@ function startLive() {
     onStatus: (connected) => {
       $('live').textContent = connected ? '他の端末とつながっています' : ''
     },
-    onUpdate: async (blob) => {
+    onUpdate: async (blob, rev) => {
       try {
         const { decryptBlob } = await import('./api.ts')
         const remote = await decryptBlob(s, blob)
         // ⚠ 未送信の変更がある時は取り込まない。黙って上書きすると入力が消える
-        const result = applyRemote(s.roomId, remote)
+        const result = applyRemote(s.roomId, remote, rev)
         if (result === 'conflict') return void showConflict(s)
         // 'ahead' ＝相手は動いていない。取り込むものは無いが、ローカルの変更も捨てない。
         // ここで state を remote に差し替えると、**入力したばかりの記録が画面から消える**

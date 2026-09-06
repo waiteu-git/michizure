@@ -100,27 +100,55 @@ export async function enterRoom(roomId: string, passphrase: string): Promise<Ses
   return { roomId, token, encKeyBits }
 }
 
-export async function loadState(s: Session): Promise<RoomState> {
-  const blob = await json<{ ciphertext: string; iv: string }>(
-    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, { headers: { Authorization: `Bearer ${s.token}` } }),
-  )
-  return open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv)
+/** サーバーから取ってきた中身と、その版 */
+export type Loaded = { state: RoomState; rev: number }
+
+/**
+ * 🔴 サーバーが先に進んでいた＝**上書きしてはいけない**。
+ * 呼び出し側は取り込み直して（3方向マージして）から送り直す。
+ */
+export class StaleError extends Error {
+  constructor(readonly rev: number) {
+    super('stale')
+    this.name = 'StaleError'
+  }
 }
 
-export async function saveState(s: Session, state: RoomState, clientId = ''): Promise<void> {
-  const blob = { ...(await seal(s.encKeyBits, state)), blobVersion: 1 }
-  await json(
-    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${s.token}`,
-        'Content-Type': 'application/json',
-        // 書いた本人へ中継し返さないための識別子。中身には関与しない
-        'X-Client-Id': clientId,
-      },
-      body: JSON.stringify(blob),
-    }),
+export async function loadState(s: Session): Promise<Loaded> {
+  const blob = await json<{ ciphertext: string; iv: string; rev: number }>(
+    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, { headers: { Authorization: `Bearer ${s.token}` } }),
   )
+  return { state: await open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv), rev: blob.rev }
+}
+
+/**
+ * サーバーへ書く。**基にした版（baseRev）を必ず添える。**
+ *
+ * ⚠ 添えないと、あるいは古い版を添えると、サーバーは 409 で断る。それが正しい
+ * ——断られずに通ると、同時に電波が戻った相手の記録を黙って消す。
+ */
+export async function saveState(
+  s: Session,
+  state: RoomState,
+  clientId = '',
+  baseRev = 0,
+): Promise<number> {
+  const blob = { ...(await seal(s.encKeyBits, state)), blobVersion: 1, baseRev }
+  const res = await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${s.token}`,
+      'Content-Type': 'application/json',
+      // 書いた本人へ中継し返さないための識別子。中身には関与しない
+      'X-Client-Id': clientId,
+    },
+    body: JSON.stringify(blob),
+  })
+  if (res.status === 409) {
+    const body = (await res.json()) as { rev?: number }
+    throw new StaleError(body.rev ?? 0)
+  }
+  return (await json<{ rev: number }>(res)).rev
 }
 
 /** 受け取った暗号文を復号する（WebSocket で届いたものを取り込むのに使う） */

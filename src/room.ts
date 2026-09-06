@@ -52,6 +52,25 @@ export class Room extends DurableObject {
     )
   }
 
+  /**
+   * 🔴 **blob を書く唯一の入口。版を必ず1つ進める。**
+   *
+   * 書き込み経路は create / PUT / WS の3つある。どれか1つでも版を進め忘れると、
+   * 「今の版を見ている」と信じた別の端末の書き込みを通してしまい、
+   * **その端末が持っている記録が黙って消える**。経路ごとに書かず、ここを通す。
+   */
+  private writeBlob(blob: Blob): number {
+    const next = this.rev() + 1
+    this.put('blob', blob)
+    this.put('rev', next)
+    return next
+  }
+
+  /** 今サーバーが持っている版。まだ一度も書いていなければ 0 */
+  private rev(): number {
+    return this.get<number>('rev') ?? 0
+  }
+
   private get<T>(key: string): T | null {
     if (!this.tableExists()) return null
     const rows = [...this.sql().exec('SELECT value FROM room WHERE key = ?', key)]
@@ -85,7 +104,7 @@ export class Room extends DurableObject {
       iterations: body.iterations,
       kdfVersion: body.kdfVersion,
     })
-    this.put('blob', body.blob)
+    this.writeBlob(body.blob)
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
     return Response.json({ ok: true })
   }
@@ -167,7 +186,8 @@ export class Room extends DurableObject {
   private handleGetBlob(): Response {
     const blob = this.get<Blob>('blob')
     if (blob === null) return Response.json({ error: 'not_found' }, { status: 404 })
-    return Response.json(blob)
+    // ⚠ 版も返す。これを持って帰らないと、次の書き込みで必ず断られる
+    return Response.json({ ...blob, rev: this.rev() })
   }
 
   private async handlePutBlob(request: Request): Promise<Response> {
@@ -175,16 +195,35 @@ export class Room extends DurableObject {
       return Response.json({ error: 'not_found' }, { status: 404 })
     }
     // 中身は読まない。読めない。形とサイズだけ見る
-    const blob = (await request.json()) as Blob
-    if (blobShapeInvalid(blob)) {
+    const body = (await request.json()) as Blob & { baseRev?: unknown }
+    if (blobShapeInvalid(body)) {
       return Response.json({ error: 'invalid_blob' }, { status: 400 })
     }
-    this.put('blob', blob)
+
+    /**
+     * 🔴 **今の版を見ていない書き込みは受けない。**
+     *
+     * 受けてしまうと、2台が**同時に**電波を取り戻した時に双方が丸ごと上書きし、
+     * **後の1本が前の記録を黙って消す**。サーバーは中身を読めないので、
+     * 消えたことにも気づけないし、直す手段も無い。
+     * 2026-09-06、2タブの実測で再現（PUT が2本続けて 200 OK になり、
+     * 先に書いた側の記録が両方の端末から消えた）。
+     *
+     * 断られた側は取り込み直してから送り直す＝そこで初めて3方向マージが働く。
+     */
+    const current = this.rev()
+    if (body.baseRev !== current) {
+      return Response.json({ error: 'stale', rev: current }, { status: 409 })
+    }
+
+    // ⚠ baseRev は保存しない（暗号文の一部ではない）。形を揃えてから書く
+    const blob: Blob = { ciphertext: body.ciphertext, iv: body.iv, blobVersion: body.blobVersion }
+    const rev = this.writeBlob(blob)
     // 🔴 PUT でも中継する。しないと「同じ部屋を開いている人に届かない」ため
     // クライアントが WS でも書くことになり、**書き込み経路が増える**。
     // 検査を全部の面に入れ忘れる形を自分で作らないための判断（設計 §8）
-    this.broadcast(blob, request.headers.get('X-Client-Id'))
-    return Response.json({ ok: true })
+    this.broadcast(blob, rev, request.headers.get('X-Client-Id'))
+    return Response.json({ ok: true, rev })
   }
 
   private handleWebSocket(request: Request): Response {
@@ -199,7 +238,7 @@ export class Room extends DurableObject {
     // ⚠ Hibernation で DO が退避しても残るよう、変数ではなく接続に括り付ける
     const clientId = new URL(request.url).searchParams.get('client') ?? ''
     server.serializeAttachment({ clientId })
-    server.send(JSON.stringify({ type: 'init', blob }))
+    server.send(JSON.stringify({ type: 'init', blob, rev: this.rev() }))
     return new Response(null, { status: 101, webSocket: client })
   }
 
@@ -210,8 +249,8 @@ export class Room extends DurableObject {
    * 他端末の更新を握り潰していた不具合があった。除外の判定はここ1箇所に集約し、
    * クライアント側に重複防止フラグを置いてはならない。
    */
-  private broadcast(blob: Blob, exclude: WebSocket | string | null): void {
-    const payload = JSON.stringify({ type: 'update', blob })
+  private broadcast(blob: Blob, rev: number, exclude: WebSocket | string | null): void {
+    const payload = JSON.stringify({ type: 'update', blob, rev })
     for (const peer of this.ctx.getWebSockets()) {
       if (peer === exclude) continue
       if (typeof exclude === 'string' && exclude !== '') {
@@ -228,7 +267,7 @@ export class Room extends DurableObject {
       ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
       return
     }
-    let msg: { type?: string; blob?: Blob }
+    let msg: { type?: string; blob?: Blob; baseRev?: unknown }
     try {
       msg = JSON.parse(message)
     } catch {
@@ -252,8 +291,15 @@ export class Room extends DurableObject {
       ws.close(1000, 'room deleted')
       return
     }
-    this.put('blob', msg.blob)
-    this.broadcast(msg.blob!, ws)
+
+    // 🔴 PUT と**同じ照合**。片面だけ守ると、そちらを通るだけで上書きが復活する
+    const current = this.rev()
+    if (msg.baseRev !== current) {
+      ws.send(JSON.stringify({ type: 'error', code: 'stale', rev: current }))
+      return
+    }
+    const rev = this.writeBlob(msg.blob!)
+    this.broadcast(msg.blob!, rev, ws)
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {

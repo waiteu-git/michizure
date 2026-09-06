@@ -139,10 +139,23 @@ export interface RoomState {
   bookings: Booking[]
 }
 
-export type ClientMessage = { type: 'update'; blob: Blob }
+/**
+ * 🔴 **版の番号。書き込みのたびに1つ増える。**
+ *
+ * サーバーは中身を読めないので、送られてきた暗号文が「今持っている版から
+ * 育ったもの」かどうかを中身では判定できない。番号を持たせて、
+ * **今の番号を見ていない書き込みを断る**（設計 §9 の3方向マージは、
+ * 断られた側が取り込み直してから送り直すことで初めて働く）。
+ *
+ * ⚠ これで新しく漏れるものは無い。**更新の回数はもともとサーバーから見えている**
+ * （設計 §7.5＝暗号文の大きさと更新の頻度）。番号はそれを名前で呼んだだけ。
+ */
+export type Rev = number
+
+export type ClientMessage = { type: 'update'; blob: Blob; baseRev: Rev }
 export type ServerMessage =
-  | { type: 'init'; blob: Blob | null }
-  | { type: 'update'; blob: Blob }
+  | { type: 'init'; blob: Blob | null; rev: Rev }
+  | { type: 'update'; blob: Blob; rev: Rev }
   | { type: 'error'; code: string }
 
 /**
