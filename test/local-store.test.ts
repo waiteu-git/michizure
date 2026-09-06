@@ -75,3 +75,27 @@ describe('外から届いた状態の取り込み', () => {
     expect(localState(ROOM)?.members[0].name).toBe('a') // 何も上書きしない
   })
 })
+
+/**
+ * 🔴 電波が戻ると、サーバーの版は**2つの経路から届く**——WebSocket の `init` と、
+ * HTTP の `pull`。どちらが先かは決まっていない。同じ版を二度マージすると、
+ * 「相手の記録と合わせました」が二度出る（2026-09-06、繋ぎ直しを直した時に発生）。
+ */
+describe('同じ版が二度届いた時', () => {
+  beforeEach(() => mem.clear())
+
+  it('二度目はマージし直さない', () => {
+    // 土台＝双方が一致していた版
+    expect(applyRemote(ROOM, base)).toBe('adopted')
+    // 圏外で自分が1件足した
+    commitLocal(ROOM, withMember('わたし'))
+    const theirs: RoomState = { ...base, members: [{ id: 'あいて', name: 'あいて' }] }
+
+    expect(applyRemote(ROOM, theirs)).toBe('merged')
+    expect(localState(ROOM)?.members).toHaveLength(2)
+
+    // 同じ版がもう一方の経路から届く
+    expect(applyRemote(ROOM, theirs)).toBe('ahead')
+    expect(localState(ROOM)?.members).toHaveLength(2)
+  })
+})

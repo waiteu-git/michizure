@@ -180,6 +180,13 @@ export function resolveTakeTheirs(roomId: string, state: RoomState): void {
  *
  * ⚠ マージが成立した後の土台は**相手の版**にする。相手の版はマージ結果の
  * 祖先であり、次に比べるべき共通点はそこだから。
+ *
+ * 🔴 **その版の目印も残す。** 電波が戻ると、サーバーの版は WebSocket の `init` と
+ * HTTP の `pull` の**両方から届く**（どちらが先かは決まっていない）。目印を空に
+ * していると、二度目も「初めて見た版」として扱われて**同じマージが二度走り、
+ * 「相手の記録と合わせました」が二度出る**。目印を残せば二度目は 'ahead' /
+ * 'unchanged' に落ちる＝取り込むものは無く、送るだけ。
+ * ⚠ これは便宜ではない。マージした時点で相手の版は**実際に見ている**。
  */
 function mergeInto(roomId: string, local: Local, remote: RoomState): 'merged' | 'conflict' {
   if (!local.base) return 'conflict'
@@ -189,7 +196,7 @@ function mergeInto(roomId: string, local: Local, remote: RoomState): 'merged' | 
     return 'conflict'
   }
   pendingConflicts = []
-  write(roomId, { state, baseStamp: null, base: remote, dirty: true })
+  write(roomId, { state, baseStamp: stampOf(remote), base: remote, dirty: true })
   return 'merged'
 }
 

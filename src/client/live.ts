@@ -6,6 +6,8 @@ import { wsOrigin } from './origins.ts'
  *
  * ⚠ 旅先では接続が頻繁に切れる。**切れることを異常として扱わない**＝
  * 黙って繋ぎ直し、繋がらない間もアプリは普通に使える（保存はローカル優先）。
+ *
+ * 🔴 ただし**繋ぎ直しをタイマーだけに任せない**。詳しくは `wakeUp()`。
  */
 
 /** この端末（このタブ）の識別子。書いた本人へ中継し返さないために使う */
@@ -20,6 +22,10 @@ let socket: WebSocket | null = null
 let roomOf: string | null = null
 let retry = 0
 let stopped = false
+/** 予約してある繋ぎ直し。電波が戻ったら**取り消して**すぐ繋ぐので、握っておく */
+let pending: ReturnType<typeof setTimeout> | null = null
+/** 最後に繋ごうとした相手。`wakeUp()` から繋ぎ直すために持つ */
+let target: { s: Session; h: Handlers } | null = null
 
 /**
  * ⚠ 何度呼ばれても接続は1本しか作らない。
@@ -34,6 +40,7 @@ export function connectLive(s: Session, h: Handlers): void {
   if (roomOf !== s.roomId) disconnectLive()
   roomOf = s.roomId
   stopped = false
+  target = { s, h }
   open(s, h)
 }
 
@@ -41,12 +48,30 @@ export function disconnectLive(): void {
   stopped = true
   retry = 0
   roomOf = null
-  socket?.close()
+  target = null
+  // ⚠ 予約も取り消す。残しておくと、別の部屋へ移った後に発火して**前の部屋へ繋ぐ**
+  clearPending()
+  drop()
+}
+
+function clearPending(): void {
+  if (pending === null) return
+  clearTimeout(pending)
+  pending = null
+}
+
+/** 今の接続を手放す。⚠ 先に `socket` を空にする（`down` の持ち主判定より前に） */
+function drop(): void {
+  const prev = socket
   socket = null
+  prev?.close()
 }
 
 function open(s: Session, h: Handlers): void {
   if (stopped) return
+  clearPending()
+  drop()
+
   const url = `${wsOrigin()}/api/rooms/${s.roomId}/ws?token=${encodeURIComponent(s.token)}&client=${clientId}`
   let ws: WebSocket
   try {
@@ -73,9 +98,21 @@ function open(s: Session, h: Handlers): void {
     if ((msg.type === 'init' || msg.type === 'update') && msg.blob) h.onUpdate(msg.blob)
   })
 
+  /**
+   * 🔴 **1回の失敗で1回だけ動くこと。**
+   *
+   * 繋がらなかった接続は `error` と `close` を**続けて**出す。同じ処理を素直に
+   * 両方へ繋ぐと、1回の失敗で繋ぎ直しが2本予約され、待ち時間の倍々も2段ずつ進む
+   * ＝上限の30秒に**3回の失敗（体感7秒）で到達する**。
+   * 2026-09-06 にテストで実測。**コードを読むだけでは見えなかった**。
+   *
+   * `socket` が自分でなくなっていたら、その失敗はもう関係ない
+   * ——2度目の通知も、`wakeUp()` に追い越された古い接続も、同じ一言で落ちる。
+   */
   const down = () => {
+    if (socket !== ws) return
+    socket = null
     h.onStatus(false)
-    if (socket === ws) socket = null
     schedule(s, h)
   }
   ws.addEventListener('close', down)
@@ -83,12 +120,39 @@ function open(s: Session, h: Handlers): void {
 }
 
 /**
- * 繋ぎ直し。⚠ 一定間隔で叩き続けない＝圏外のまま電池と通信量を使い切る。
+ * 繋ぎ直しの予約。⚠ 一定間隔で叩き続けない＝圏外のまま電池と通信量を使い切る。
  * 1秒から倍々で最大30秒まで待つ。
  */
 function schedule(s: Session, h: Handlers): void {
   if (stopped) return
   const wait = Math.min(1000 * 2 ** retry, 30_000)
   retry++
-  setTimeout(() => open(s, h), wait)
+  pending = setTimeout(() => {
+    pending = null
+    open(s, h)
+  }, wait)
 }
+
+/**
+ * 🔴 **「繋がるはずの瞬間」を受け取る。**
+ *
+ * 繋ぎ直しをタイマーだけに任せると、電波が戻っても**最大30秒待たされる**。
+ * リロードすると直るのは、待ち時間の積み上げが 0 に戻って即座に繋ぎ直すから
+ * ——つまり「リロードで直る」は仕様ではなく、**この購読が無いことの症状**だった
+ * （2026-09-06、実機で「合流する時としない時がある」として踏んだ）。
+ *
+ * ⚠ 画面へ戻った時も見る。機内モードの解除は**アプリの外**（設定・コントロール
+ * センター）で行うので、端末は戻ってくるまでタイマーを止めていることがある
+ * ＝`online` だけでは、戻った瞬間に動くとは限らない。
+ */
+function wakeUp(): void {
+  if (stopped || !target) return
+  if (socket && socket.readyState === WebSocket.OPEN) return
+  retry = 0
+  open(target.s, target.h)
+}
+
+addEventListener('online', wakeUp)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) wakeUp()
+})

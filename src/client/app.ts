@@ -304,13 +304,7 @@ async function openRemembered(roomId: string) {
   }
 
   try {
-    const result = await pull(s)
-    if (result === 'conflict') return showConflict(s)
-    if (result === 'merged') toast('相手の記録と合わせました')
-    state = localState(roomId)
-    renderRoom()
-    renderSync(isDirty(roomId) ? 'pending' : 'synced')
-    if (isDirty(roomId)) void push(s, clientId).then(renderSync)
+    await resync(s)
   } catch {
     if (!cached) {
       toast('つながりません。合言葉で入り直してください')
@@ -320,6 +314,23 @@ async function openRemembered(roomId: string) {
       renderSync(navigator.onLine ? 'pending' : 'offline')
     }
   }
+}
+
+/**
+ * 端末とサーバーを突き合わせる。**取り込んでから送る**——順序を逆にすると、
+ * まだ見ていない相手の版を自分の版で上書きする。
+ *
+ * ⚠ 通信の失敗は投げる。**どう見せるかは呼び出し側で違う**（部屋を開いた時は
+ * 入り直しを促すが、電波が戻った時はその場で「未同期」に戻すだけでよい）。
+ */
+async function resync(s: Session): Promise<void> {
+  const result = await pull(s)
+  if (result === 'conflict') return showConflict(s)
+  if (result === 'merged') toast('相手の記録と合わせました')
+  state = localState(s.roomId)
+  renderRoom()
+  renderSync(isDirty(s.roomId) ? 'pending' : 'synced')
+  if (isDirty(s.roomId)) void push(s, clientId).then(renderSync)
 }
 
 /**
@@ -999,8 +1010,31 @@ function offerOfflineJoin(roomId: string) {
   $('offlineHint').dataset.room = roomId
 }
 
+/**
+ * 電波が戻った瞬間にやること。
+ *
+ * 🔴 **`isDirty` で門を作らない。自分が何も足していなくても、相手の記録は取りに行く。**
+ *
+ * 以前はここが「未送信があれば送る」だけだった。だから圏外で何も足さなかった端末は、
+ * 電波が戻っても**合流せず、`renderSync` も呼ばれないので表示も「オフライン」のまま**
+ * だった。合流と表示が同じ1つの条件にぶら下がっていたせいで、利用者からは
+ * 「保存済みに変わる時だけ合流する」ように見えていた——**相関ではなく、同じ原因**。
+ * （2026-09-06、実機からの報告で判明）
+ *
+ * ⚠ 送るだけでは足りない。`push` は相手の版を取りに行かないので、
+ * **受け取る側が永久に受け取らない**。
+ */
 addEventListener('online', () => {
-  if (session && isDirty(session.roomId)) void push(session, clientId).then(renderSync)
+  const s = session
+  if (!s || $('room').hidden) return
+  // 圏外入室（設計 §9.1）で入った部屋は token を持たない＝送っても弾かれる。
+  // 合言葉で正式に入り直してもらう（#rejoinHint はこの瞬間のために書かれている）
+  if (!s.token) {
+    ;($('joinRoom') as HTMLInputElement).value = s.roomId
+    $('rejoinHint').hidden = false
+    return show('join')
+  }
+  void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline'))
 })
 
 // URL が /r/<roomId> なら、その部屋を開こうとする（合言葉は URL に入れない＝設計 §7.6.1 ②）
