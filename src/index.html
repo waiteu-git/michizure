@@ -2,7 +2,12 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      ⚠ viewport-fit=cover が無いと env(safe-area-inset-*) が 0 のままになる。
+      ネイティブのシェルでは、それだけでタイトルが時刻やノッチに重なる
+      （2026-09-06、シミュレータで実際に重なっていた）。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <!-- クローズド運用の前提（非公開・宣伝なし）を守る。robots.txt と X-Robots-Tag も併用 -->
     <meta name="robots" content="noindex, nofollow" />
     <!-- API の宛先。Web 配信では空＝相対パス。ネイティブのシェルへ入れる時だけ配信元を入れる -->
@@ -33,7 +38,14 @@
       body {
         font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
         background: var(--bg); color: var(--fg);
-        max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem 5rem;
+        max-width: 34rem; margin: 0 auto;
+        /* ⚠ 上下左右ともセーフエリアを足す。ブラウザでは env() が 0 なので
+           これまでと同じ見た目のまま、シェルでだけ余白が増える */
+        padding:
+          calc(1.5rem + env(safe-area-inset-top))
+          calc(1rem + env(safe-area-inset-right))
+          calc(5rem + env(safe-area-inset-bottom))
+          calc(1rem + env(safe-area-inset-left));
         line-height: 1.7;
       }
       h1 { font-size: 1.35rem; margin: 0 0 .2rem; }
@@ -147,6 +159,14 @@
       </details>
 
       <div id="remembered"></div>
+
+      <!--
+        🔴 シェルは【別オリジン】で動くので、API の宛先と CORS が噛み合わないと
+        **アプリは起動し画面も出るが、部屋の作成も入室も全部失敗する**。
+        気づくのがデモの最中になるのを避けるため、繋がらない時だけここに出す。
+        ⚠ Web 配信（宛先が空＝相対パス）では出さない。同一オリジンなので問題が起きない。
+      -->
+      <p class="warn" id="apiWarn" hidden></p>
 
       <h2>合言葉で入る</h2>
       <button class="ghost" id="toJoin">部屋のIDと合言葉を入力する</button>

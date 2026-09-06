@@ -13,6 +13,7 @@ import { balances, advanced, settle, parts, isDone, shareSummary } from './settl
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins } from './origins.ts'
+import { getApiBase } from './config.ts'
 import { entryFromHash, entryUrl, emptyRoomForEntry } from './entry.ts'
 import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
 import { KDF_VERSION } from '../types.ts'
@@ -34,6 +35,26 @@ import {
 
 // ⚠ 単語リスト（約7KB）は【部屋を作る時にしか要らない】ので、その時に取りに行く。
 // 最初の読み込みに含めると、入室しかしない人にも運ばせることになる
+/**
+ * 🔴 **遅延読み込みは失敗しうる。失敗を握り潰さないこと。**
+ *
+ * 2026-09-06、iOS のシェルで「作る」を押しても**何も起きず、通知も出ない**状態を
+ * 実際に踏んだ。原因は遅延 chunk の読み込み失敗で、それが try の外にあったため
+ * 例外が誰にも拾われなかった。**画面は正常に見えるのにボタンが死んでいる**という、
+ * 一番気づきにくい壊れ方になる。
+ *
+ * ⇒ 遅延読み込みは必ずここを通し、失敗したら利用者に見える形で言う。
+ */
+async function lazy<T>(load: () => Promise<T>, what: string): Promise<T | null> {
+  try {
+    return await load()
+  } catch (e) {
+    toast(`${what}を読み込めませんでした（電波が戻ってから試してください）`)
+    console.error(`遅延読み込みに失敗: ${what}`, e)
+    return null
+  }
+}
+
 const passphraseModule = () => import('./passphrase.ts')
 // 取り込みも、使う人だけが運べばよい
 const importModule = () => import('./import.ts')
@@ -117,6 +138,33 @@ function show(screen: 'home' | 'created' | 'join' | 'room') {
 
 // ---------- 入口 ----------
 
+/**
+ * API に届くかを一度だけ確かめる（シェル向け）。
+ *
+ * 🔴 シェルは別オリジンで動くので、宛先か CORS が噛み合わないと
+ * **画面は出るのに部屋が作れない**。原因が「通信」だと分からないまま
+ * 「アプリが壊れている」に見える。届かない時だけ、理由を名指しで出す。
+ *
+ * ⚠ Web 配信（宛先が空＝相対パス）では何もしない。同一オリジンで起きない問題だし、
+ * 起動のたびに1リクエスト増やす理由も無い。
+ */
+async function checkApiReachable() {
+  if (!getApiBase()) return
+  const box = $('apiWarn')
+  try {
+    const res = await fetch(`${getApiBase()}/api/health`)
+    if (res.ok) return
+    box.textContent = `サーバーが ${res.status} を返しました（${getApiBase()}）。`
+  } catch {
+    // ⚠ CORS で落ちた場合も fetch は同じ例外になる＝ここでは区別できない。
+    // 区別できないことを、区別できるかのように書かない
+    box.textContent =
+      `サーバーに届きません（${getApiBase()}）。` +
+      '通信が無いか、このアプリの出所が許可されていない可能性があります。'
+  }
+  box.hidden = false
+}
+
 function renderHome() {
   const rooms = rememberedAll()
   $('remembered').innerHTML = rooms.length
@@ -136,7 +184,9 @@ async function doCreate() {
   const name = ($('newName') as HTMLInputElement).value.trim()
   if (!name) return toast('旅行の名前を入れてください')
   const custom = ($('customPass') as HTMLInputElement).value.trim()
-  const { generatePassphrase, customPassphraseTooWeak, estimateBits } = await passphraseModule()
+  const mod = await lazy(passphraseModule, '合言葉の生成')
+  if (!mod) return
+  const { generatePassphrase, customPassphraseTooWeak, estimateBits } = mod
   if (custom && customPassphraseTooWeak(custom)) {
     return toast(`合言葉が弱すぎます（推定 ${estimateBits(custom)} ビット）`)
   }
@@ -300,7 +350,9 @@ async function toggleQr() {
     return
   }
   if (!entry) return
-  const { qrSvg } = await qrModule()
+  const qr = await lazy(qrModule, 'QR の描画')
+  if (!qr) return
+  const { qrSvg } = qr
   const url = entryUrl(shareOrigin(), entry.roomId, entry)
   const { svg, modules } = qrSvg(url)
   box.innerHTML = svg
@@ -924,3 +976,5 @@ if (m) {
 } else {
   renderHome()
 }
+
+void checkApiReachable()

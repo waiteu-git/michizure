@@ -20,6 +20,9 @@ if (!apiBase) {
   )
 } else if (!/^https:\/\//.test(apiBase)) {
   fail.push(`MICHIZURE_API_BASE は https:// で始めること: ${apiBase}`)
+} else if (/localhost|127\.0\.0\.1|192\.168\./.test(apiBase)) {
+  // 手元の検証用。⚠ これで作ったものを配ってはいけない
+  console.warn(`⚠ 検証用の宛先です（配布不可）: ${apiBase}`)
 }
 
 // シェルの出所（capacitor.config.json の scheme）が許可一覧に在るか
