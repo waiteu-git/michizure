@@ -335,6 +335,44 @@ async function openRemembered(roomId: string) {
  * 表示している件数も止まったままで、利用者は何を捨てるのか判断できなかった。
  */
 /**
+ * 旅の途中で人を招く。**部屋の中から入口の QR を出す。**
+ *
+ * 作った直後の画面には券の材料が残っているが、そこを離れると消える。
+ * 実際の旅では「宿に着いてから B さんも入れる」ほうが普通なので、
+ * ここから出せないと機能が使い物にならない（2026-09-06 に気づいた設計漏れ）。
+ *
+ * ⚠ salt はサーバーから取り直す（`/salt` は認証不要）。**通信が要る**＝
+ * 圏外では招けない。招くのは宿など電波のある場所を想定している。
+ */
+async function toggleInviteQr() {
+  const box = $('qrRoom')
+  if (!box.hidden) {
+    box.hidden = true
+    $('qrRoomHint').hidden = true
+    $('inviteBtn').textContent = 'この旅行に招く（QR）'
+    return
+  }
+  if (!session) return
+  const qr = await lazy(qrModule, 'QR の描画')
+  if (!qr) return
+  let e: { salt: string; iterations: number; kdfVersion: number }
+  try {
+    const { roomEntry } = await import('./api.ts')
+    e = await roomEntry(session.roomId)
+  } catch {
+    return toast('入口の情報を取れませんでした（電波のある場所で試してください）')
+  }
+  const url = entryUrl(shareOrigin(), session.roomId, e)
+  const { svg, modules } = qr.qrSvg(url)
+  box.innerHTML = svg
+  box.dataset.url = url
+  box.hidden = false
+  $('qrRoomHint').hidden = false
+  $('inviteBtn').textContent = 'QRをしまう'
+  if (modules > 85) console.warn(`QR が密です（${modules} モジュール）`)
+}
+
+/**
  * 入口の QR を出す・しまう。
  *
  * ⚠ 載せるのは入口（版・反復回数・salt）だけで、**部屋の中身は載せない**。
@@ -848,6 +886,9 @@ document.addEventListener('click', (e) => {
   }
   if (el.id === 'showQr') {
     void toggleQr()
+  }
+  if (el.id === 'inviteBtn') {
+    void toggleInviteQr()
   }
   if (el.id === 'sayPass') {
     // 読み上げる人のために大きくするだけ。合言葉を音声で送るわけではない

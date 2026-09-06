@@ -66,6 +66,20 @@ function generateSaltB64(): string {
  * ⚠ 鍵は**その部屋が作られた時の反復回数と正規化規則**でしか再現しない。
  * 既定値ではなくサーバーが返した値を使う（設計 §7.6.1 ④）。
  */
+/**
+ * 部屋の入口の情報（salt・反復回数・正規化の版）。**認証は要らない。**
+ *
+ * 圏外入室券（設計 §9.1）を後から作り直すのに使う。作った直後の画面を離れると
+ * 券の材料が手元から消えるが、旅の途中で人を招く場面のほうが普通なので、
+ * ここから取り直せる必要がある。
+ * ⚠ **通信が要る**＝圏外では券を作れない。招くのは宿など電波のある場所を想定。
+ */
+export async function roomEntry(
+  roomId: string,
+): Promise<{ salt: string; iterations: number; kdfVersion: number }> {
+  return json(await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`))
+}
+
 export async function enterRoom(roomId: string, passphrase: string): Promise<Session> {
   const meta = await json<{ salt: string; iterations: number; kdfVersion: number }>(
     await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`),

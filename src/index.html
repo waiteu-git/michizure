@@ -256,6 +256,20 @@
         <button id="addMemberBtn">追加</button>
       </div>
 
+      <!--
+        旅の途中で人を招く（設計 §9.1）。作った直後の画面を離れると券の材料が
+        手元から消えるが、**宿に着いてから誰かを招く場面のほうが普通**なので、
+        ここから出せる必要がある。⚠ 券の材料（salt）はサーバーから取り直す＝通信が要る。
+      -->
+      <div class="actions">
+        <button class="ghost small" id="inviteBtn">この旅行に招く（QR）</button>
+      </div>
+      <div id="qrRoom" hidden></div>
+      <p class="muted" id="qrRoomHint" hidden>
+        相手のカメラでこれを読んでもらい、<b>合言葉は声で伝えてください</b>。<br>
+        読んだ相手は、電波が無くてもこの部屋に入って記録を始められます。
+      </p>
+
       <h2>記録</h2>
       <div id="bookings"></div>
 
