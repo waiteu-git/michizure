@@ -8,7 +8,14 @@ import {
   type Booking,
   type Session,
 } from './api.ts'
-import { remember, remembered, rememberedAll, forget } from './session-store.ts'
+import {
+  remember,
+  remembered,
+  rememberedAll,
+  rememberedEntry,
+  rememberEntry,
+  forget,
+} from './session-store.ts'
 import { balances, advanced, settle, parts, isDone, shareSummary } from './settle.ts'
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
@@ -201,7 +208,13 @@ async function doCreate() {
     session = { roomId: s.roomId, token: s.token, encKeyBits: s.encKeyBits }
     state = initial
     pendingImport = null
-    remember(session, name)
+    // ⚠ 入口の材料も一緒に控える。控えないと、後から人を招く時に毎回
+    // サーバーへ取りに行くことになり、**圏外では招けない**（設計 §9.1）
+    remember(session, name, {
+      salt: s.salt,
+      iterations: PBKDF2_ITERATIONS,
+      kdfVersion: KDF_VERSION,
+    })
     commitLocal(s.roomId, state)
     ;($('shownPass') as HTMLElement).textContent = passphrase
     ;($('shownUrl') as HTMLElement).textContent = `${shareOrigin()}/r/${s.roomId}`
@@ -225,14 +238,15 @@ async function doJoin() {
   $('joinBtn').setAttribute('disabled', '')
   toast('合言葉から鍵を作っています…')
   try {
-    session = await enterRoom(roomId, pass)
+    const entered = await enterRoom(roomId, pass)
+    session = entered.session
     // 🔴 端末に控えがあるなら**上書きしない**。圏外入室（§9.1）で入った端末は
     // すでに自分の記録を持っている＝ここで loadState を書き込むと、
     // 圏外で足した記録が黙って消える。pull は3方向マージを通す
     if (localState(roomId)) {
       const r = await pull(session)
       state = localState(roomId)
-      remember(session, state?.name ?? '')
+      remember(session, state?.name ?? '', entered.entry)
       if (r === 'conflict') return showConflict(session)
       if (r === 'merged') toast('相手の記録と合わせました')
       renderSync(isDirty(roomId) ? 'pending' : 'synced')
@@ -241,7 +255,7 @@ async function doJoin() {
     } else {
       const loaded = await loadState(session)
       state = loaded.state
-      remember(session, state.name)
+      remember(session, state.name, entered.entry)
       // ⚠ 取ってきたばかりの版を「未送信の変更」にしない。
       // 版の番号もここで控える（控えないと最初の送信が必ず断られる）
       adoptRemote(roomId, state, loaded.rev)
@@ -370,12 +384,24 @@ async function toggleInviteQr() {
   if (!session) return
   const qr = await lazy(qrModule, 'QR の描画')
   if (!qr) return
-  let e: { salt: string; iterations: number; kdfVersion: number }
-  try {
-    const { roomEntry } = await import('./api.ts')
-    e = await roomEntry(session.roomId)
-  } catch {
-    return toast('入口の情報を取れませんでした（電波のある場所で試してください）')
+  /**
+   * 🔴 **まず手元を見る。** 以前はここで必ずサーバーへ取りに行っていたので、
+   * **圏外では人を招けなかった**——「招かれた人は電波なしで入れる」のに
+   * 「招く側は電波が要る」という裏返し。宿に着いてから誰かを招く場面は、
+   * だいたい電波が悪い（2026-09-06、ユーザーが実機で踏んだ）。
+   *
+   * ⚠ 材料は秘密ではない（`/salt` は認証なしで誰にでも返る）。控えても漏れは増えない。
+   */
+  let e = rememberedEntry(session.roomId)
+  if (!e) {
+    // この端末の控えが古い（材料を持たない世代）＝一度だけ取りに行き、次から手元で済ませる
+    try {
+      const { roomEntry } = await import('./api.ts')
+      e = await roomEntry(session.roomId)
+      rememberEntry(session.roomId, e)
+    } catch {
+      return toast('入口の情報がこの端末にありません。一度、電波のある場所で開いてください')
+    }
   }
   const url = entryUrl(shareOrigin(), session.roomId, e)
   const { svg, modules } = qr.qrSvg(url)
@@ -586,8 +612,30 @@ function startLive() {
   })
 }
 
+/**
+ * 🔴 **電波のあるうちに、圏外で要る物を手元へ寄せておく。**
+ *
+ * QR を描くコードは遅延 chunk（ライブラリ本体で約 21KB）で、Service Worker は
+ * **使われた時にしか蓄えない**。つまり一度も QR を出していない端末は、圏外に
+ * なった瞬間に**人を招けなくなる**——招かれた側は電波なしで入れるのに、招く側が
+ * 電波を要求される。2026-09-06、ユーザーが実機で踏んだ（入口の材料と合わせて2層あった）。
+ *
+ * ⚠ 初回読み込みには足さない（静的 import にすると初回がほぼ倍になる）。
+ * **部屋に居る人だけが、描画を邪魔しない後ろで静かに取る。**
+ * ⚠ 失敗しても黙る。要る時に改めて取りに行き、そこで初めて画面に出す。
+ * ⚠ ネイティブのシェルでは成果物が端末に同梱されるので、この寄せ集めは要らない
+ *   （害も無い＝同じファイルを読むだけ）。
+ */
+let qrWarmed = false
+function warmQrForOffline() {
+  if (qrWarmed || !navigator.onLine) return
+  qrWarmed = true
+  void qrModule().catch(() => (qrWarmed = false))
+}
+
 function renderRoom() {
   if (!state) return
+  warmQrForOffline()
   $('roomName').textContent = state.name
   startLive()
   renderMembers()
@@ -998,7 +1046,8 @@ async function offlineJoin(roomId: string, passphrase: string): Promise<boolean>
     const empty = emptyRoomForEntry()
     state = empty
     adoptAsBase(roomId, empty)
-    remember(session, '')
+    // 🔴 券そのものが入口の材料。控えれば**この端末も圏外のまま次の人を招ける**
+    remember(session, '', e)
     show('room')
     renderRoom()
     renderSync('offline')

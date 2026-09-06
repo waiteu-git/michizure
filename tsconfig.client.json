@@ -21,6 +21,7 @@
     "src/types.ts",
     "test/local-store.test.ts",
     "test/live.test.ts",
-    "test/push-retry.test.ts"
+    "test/push-retry.test.ts",
+    "test/session-store.test.ts"
   ]
 }

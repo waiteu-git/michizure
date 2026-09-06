@@ -2,6 +2,7 @@ import { deriveKeys, toBase64 } from '../keys.ts'
 import { seal, open } from '../box.ts'
 import { KDF_VERSION } from '../types.ts'
 import { getApiBase } from './config.ts'
+import type { Entry } from './entry.ts'
 import { PBKDF2_ITERATIONS } from '../keys.ts'
 
 export type RoomState = {
@@ -80,10 +81,16 @@ export async function roomEntry(
   return json(await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`))
 }
 
-export async function enterRoom(roomId: string, passphrase: string): Promise<Session> {
-  const meta = await json<{ salt: string; iterations: number; kdfVersion: number }>(
-    await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`),
-  )
+/**
+ * ⚠ 入口の材料（`entry`）も返す。**呼び出し側はこれを端末に控える。**
+ * 控えないと、後から人を招く時に毎回サーバーへ取りに行くことになり、
+ * **圏外では招けない**——圏外入室券の意味が半分無くなる（設計 §9.1）。
+ */
+export async function enterRoom(
+  roomId: string,
+  passphrase: string,
+): Promise<{ session: Session; entry: Entry }> {
+  const meta = await json<Entry>(await fetch(`${getApiBase()}/api/rooms/${roomId}/salt`))
   const { authKey, encKeyBits } = await deriveKeys(
     passphrase,
     meta.salt,
@@ -97,7 +104,7 @@ export async function enterRoom(roomId: string, passphrase: string): Promise<Ses
       body: JSON.stringify({ authKey }),
     }),
   )
-  return { roomId, token, encKeyBits }
+  return { session: { roomId, token, encKeyBits }, entry: meta }
 }
 
 /** サーバーから取ってきた中身と、その版 */
