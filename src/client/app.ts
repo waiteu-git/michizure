@@ -3,6 +3,7 @@ import {
   enterRoom,
   loadState,
   saveState,
+  roomEntry,
   emptyState,
   type RoomState,
   type Booking,
@@ -396,7 +397,6 @@ async function toggleInviteQr() {
   if (!e) {
     // この端末の控えが古い（材料を持たない世代）＝一度だけ取りに行き、次から手元で済ませる
     try {
-      const { roomEntry } = await import('./api.ts')
       e = await roomEntry(session.roomId)
       rememberEntry(session.roomId, e)
     } catch {
@@ -627,15 +627,36 @@ function startLive() {
  *   （害も無い＝同じファイルを読むだけ）。
  */
 let qrWarmed = false
-function warmQrForOffline() {
-  if (qrWarmed || !navigator.onLine) return
-  qrWarmed = true
-  void qrModule().catch(() => (qrWarmed = false))
+let entryAsked = ''
+
+function warmForOffline(roomId: string): void {
+  if (!navigator.onLine) return
+
+  // ① QR を描くコード。遅延 chunk なので、触らないと Service Worker が蓄えない
+  if (!qrWarmed) {
+    qrWarmed = true
+    void qrModule().catch(() => (qrWarmed = false))
+  }
+
+  /**
+   * ② 入口の材料。**この版より前に覚えた部屋は持っていない。**
+   *
+   * 🔴 利用者に「電波のあるうちに一度QRを出しておいて」と頼まないこと。
+   * 頼まれたことは忘れるし、**忘れたことに気づくのは押せない場所（圏外）**。
+   * 移行の手間を利用者の記憶に預けた時点で、その機能は壊れている。
+   * ⇒ 電波のある所でその部屋を開いたら、黙って取ってくる（認証不要の小さな1回）。
+   */
+  if (entryAsked !== roomId && !rememberedEntry(roomId)) {
+    entryAsked = roomId
+    void roomEntry(roomId)
+      .then((e) => rememberEntry(roomId, e))
+      .catch(() => (entryAsked = '')) // 取れなければ、次に部屋を開いた時にまた試す
+  }
 }
 
 function renderRoom() {
   if (!state) return
-  warmQrForOffline()
+  if (session) warmForOffline(session.roomId)
   $('roomName').textContent = state.name
   startLive()
   renderMembers()
