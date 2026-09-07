@@ -104,9 +104,12 @@ export class Room extends DurableObject {
       iterations: body.iterations,
       kdfVersion: body.kdfVersion,
     })
-    this.writeBlob(body.blob)
+    // ⚠ 版を返す。返さないと、**作った本人が今の版を知る手段が無い**＝最初の書き込みが
+    // 必ず 409 になり、土台も無いのでマージもできず、その端末は永久に送れなくなる
+    // （2026-09-07 のレビューで3つの観点が独立に指した欠陥）
+    const rev = this.writeBlob(body.blob)
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
-    return Response.json({ ok: true })
+    return Response.json({ ok: true, rev })
   }
 
   private handleSalt(): Response {

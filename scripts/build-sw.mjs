@@ -2,7 +2,7 @@
 //
 // 🔴 手書きしない。chunk の名前は内容ハッシュで毎回変わるので、
 // 手書きの一覧は必ず腐る（そして腐っても画面は出るため気づけない）。
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -17,18 +17,63 @@ const pub = join(root, 'public')
 // 動いたまま静かに死ぬ（2026-09-06 の設計レビューが指摘）。
 // ⇒ app.js が【静的に】import している物だけを保存し、残りは使われた時に
 //    fetch のハンドラが結果を蓄える（runtime caching）。
-const app = readFileSync(join(pub, 'app.js'), 'utf8')
-const staticChunks = [
-  ...new Set(
-    [...app.matchAll(/(?:^|[;}\s])import\s*(?:[\w*{][^"']*from\s*)?["']\.\/(chunk-[^"']+)["']/g)].map(
-      (m) => m[1],
-    ),
-  ),
-]
-const files = ['app.js', ...staticChunks]
+// 🔴 **esbuild の構成表から決める。app.js の本文を正規表現で読まない。**
+// 正規表現版は「app.js が直接 import している物」しか見えず、**その先の静的 import を
+// 辿らない**（たまたま揃っていただけ）。構成表なら推移的に辿れるし、どの chunk に
+// どの原簿が入ったかも分かる（2026-09-07 のレビューで両方を指摘された）。
+const metaPath = join(root, '.build-meta.json')
+let meta
+try {
+  meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+} catch {
+  throw new Error(
+    '.build-meta.json が無い。esbuild に --metafile=.build-meta.json を付けて実行すること',
+  )
+}
+const outs = Object.fromEntries(
+  Object.entries(meta.outputs).map(([k, v]) => [k.replace(/^public\//, ''), v]),
+)
+
+/** 静的 import だけを推移的に辿る（動的 import は遅延のまま＝初回に運ばない） */
+function staticClosure(entry) {
+  const seen = new Set()
+  const walk = (f) => {
+    if (seen.has(f) || !outs[f]) return
+    seen.add(f)
+    for (const im of outs[f].imports ?? []) {
+      if (im.kind === 'import-statement') walk(im.path.replace(/^public\//, ''))
+    }
+  }
+  walk(entry)
+  return [...seen]
+}
+
+/**
+ * 🔴 **圏外で最初に要る物は、使われる前に蓄えておく。**
+ *
+ * Service Worker は遅延 chunk を「使われた時」にしか蓄えない。QR を描くコードは
+ * 遅延なので、**一度も QR を出していない端末は圏外で人を招けない**。
+ * とりわけ圏外入室した端末は、定義から電波が無いので寄せ集めが走らない
+ * （2026-09-07 のレビューで発見。「圏外でも招ける」と直したつもりの穴）。
+ * ⇒ 初回読み込みには足さず（静的 import にしない）、**インストール時に蓄える**。
+ */
+const OFFLINE_CRITICAL = ['src/client/qr.ts']
+const criticalChunks = OFFLINE_CRITICAL.map((src) => {
+  const hit = Object.entries(outs).find(([, v]) => v.inputs && src in v.inputs)
+  if (!hit) throw new Error(`${src} を含む chunk が構成表に無い（先読みを決められない）`)
+  return hit[0]
+})
+
+const files = [...new Set([...staticClosure('app.js'), ...criticalChunks])]
 const assets = ['/', ...files.map((f) => `/${f}`)]
 
+// ⚠ 「一覧に足した」と「一覧に載った」は別。載ったことまで確かめてから書き出す
+for (const c of criticalChunks) {
+  if (!assets.includes(`/${c}`)) throw new Error(`圏外で要る ${c} が先読み一覧に入っていない`)
+}
+
 const lazy = readdirSync(pub).filter((f) => f.endsWith('.js') && f !== 'sw.js' && !files.includes(f))
+rmSync(metaPath, { force: true })
 
 // 版はビルド成果物の内容から決める。内容が変われば sw.js も変わり、
 // ブラウザが更新を検出する。日時を使うと毎回変わって無駄な更新が走る

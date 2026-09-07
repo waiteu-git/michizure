@@ -293,6 +293,29 @@ describe('版の照合', () => {
     expect((await get(room.roomId, room.token)).rev).toBeGreaterThan(0)
   })
 
+  /**
+   * 🔴 作成の応答にも版を載せること。載せないと**作った本人が今の版を知る手段が無く**、
+   * 最初の書き込みが必ず 409 になり、土台も無いのでマージもできず永久に詰む
+   * （2026-09-07 のレビューで3つの観点が独立に指した欠陥）。
+   */
+  it('作成の応答に版が入っていて、その版でそのまま書ける', async () => {
+    const salt = generateSalt()
+    const { authKey, encKeyBits } = await deriveKeys('ことば', salt, FAST)
+    const blob = { ...(await seal(encKeyBits, { name: '初期', members: [], bookings: [] })), blobVersion: 1 }
+    const res = await SELF.fetch('https://example.com/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salt, authKey, blob, iterations: FAST, kdfVersion: 1 }),
+    })
+    const created = (await res.json()) as { roomId: string; token: string; rev: number }
+    expect(created.rev).toBeGreaterThan(0)
+    expect(created.rev).toBe((await get(created.roomId, created.token)).rev)
+
+    // 返ってきた版をそのまま使えば、最初の書き込みが通る
+    const next = await blobOf(encKeyBits, '作った直後の編集')
+    expect((await put(created.roomId, created.token, { ...next, baseRev: created.rev })).status).toBe(200)
+  })
+
   it('古い版に基づく書き込みは断られ、保存済みは変わらない', async () => {
     const room = await createRoom()
     const before = await get(room.roomId, room.token)

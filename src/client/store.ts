@@ -1,5 +1,6 @@
 import { loadState, saveState, StaleError, type RoomState, type Session } from './api.ts'
 import { merge3, type BookingConflict } from './merge.ts'
+import type { Booking } from './api.ts'
 
 /**
  * 旅先は電波が悪い。**通信が成功することを前提にしない。**
@@ -143,15 +144,28 @@ export async function push(s: Session, clientId = '', tries = 2): Promise<SyncSt
     // 消えていた（サーバーは受け取っているのに端末から消えるので気づけない）。
     const after = read(s.roomId)!
     const moved = stampOf(after.state) !== stampOf(local.state)
-    write(s.roomId, {
-      ...after,
-      // 送れた＝この版で双方が一致した。次のマージの土台はここ
-      baseStamp: stampOf(local.state),
-      base: local.state,
-      rev,
-      dirty: moved,
-    })
-    return moved ? 'pending' : 'synced'
+    /**
+     * 🔴 **送っている間に取り込んだ「自分の応答より新しい版」を巻き戻さない。**
+     *
+     * 送信中に WebSocket で相手の版が届いてマージされると、その時に控えた
+     * base と版番号の方が新しい。自分の応答（rev）で上書きすると土台が嘘になり、
+     * **次のマージで「消したはずの記録が復活する」**（2026-09-07 のレビューで実測）。
+     */
+    const advanced = (after.rev ?? 0) > rev
+    write(
+      s.roomId,
+      advanced
+        ? { ...after, dirty: true }
+        : {
+            ...after,
+            // 送れた＝この版で双方が一致した。次のマージの土台はここ
+            baseStamp: stampOf(local.state),
+            base: local.state,
+            rev,
+            dirty: moved,
+          },
+    )
+    return advanced || moved ? 'pending' : 'synced'
   } catch (e) {
     if (e instanceof StaleError && tries > 0) {
       let again: Awaited<ReturnType<typeof pull>>
@@ -267,17 +281,61 @@ function mergeInto(
 ): 'merged' | 'conflict' {
   if (!local.base) return 'conflict'
   const { state, conflicts } = merge3(local.base, local.state, remote)
+
   if (conflicts.length) {
-    pendingConflicts = conflicts
+    /**
+     * 🔴 **併合結果を捨てない。**
+     *
+     * 以前はここで `state` を捨てて何も書かずに返していた。すると、相手が別に足した
+     * 記録（＝衝突していない物）がローカルに入らないまま、解決画面が「今サーバーで見た版」を
+     * 名乗って送るので、**サーバーからも相手の記録が消えた**（2026-09-07 のレビューで実測）。
+     * 版の照合を入れた面で、いちばん効くべき経路だけが無効になっていた。
+     *
+     * ⚠ 解けなかった件は**暫定的に自分の版を残す**。消すと、選んでいる最中に
+     * 画面から記録が消える。暫定なので、利用者が「相手を残す」を選べば置き換わる。
+     */
+    const provisional = conflicts.map((c) => c.mine).filter((b): b is Booking => b !== null)
+    write(roomId, {
+      state: { ...state, bookings: [...state.bookings, ...provisional] },
+      baseStamp: stampOf(remote),
+      base: remote,
+      rev,
+      dirty: true,
+    })
+    pendingConflicts = { roomId, list: conflicts }
     return 'conflict'
   }
-  pendingConflicts = []
+
+  pendingConflicts = null
   write(roomId, { state, baseStamp: stampOf(remote), base: remote, rev, dirty: true })
   return 'merged'
 }
 
-/** 直前のマージで解けなかった予約。呼び出し側が利用者へ出す */
-let pendingConflicts: BookingConflict[] = []
-export function takePendingConflicts(): BookingConflict[] {
-  return pendingConflicts
+/**
+ * 直前のマージで解けなかった予約。呼び出し側が利用者へ出す。
+ * ⚠ **取ったら消すこと。** 消さないと、別の部屋を開いた時に前の部屋の予約が
+ * 解決パネルへ出る（2026-09-07 のレビューで指摘）。部屋も照合する。
+ */
+let pendingConflicts: { roomId: string; list: BookingConflict[] } | null = null
+export function takePendingConflicts(roomId: string): BookingConflict[] {
+  if (!pendingConflicts || pendingConflicts.roomId !== roomId) return []
+  const { list } = pendingConflicts
+  pendingConflicts = null
+  return list
+}
+
+/**
+ * 件別の衝突を解いた結果を確定する。
+ * ⚠ **版を触らない。** マージした時に控えた版が正しい（相手の版を実際に取り込んでいる）。
+ * ここで「今サーバーにある版」を名乗ると、取り込んでいない物まで上書きしてしまう。
+ */
+export function resolveBookings(roomId: string, state: RoomState): void {
+  const prev = read(roomId)
+  write(roomId, {
+    state,
+    baseStamp: prev?.baseStamp ?? null,
+    base: prev?.base ?? null,
+    rev: prev?.rev ?? 0,
+    dirty: true,
+  })
 }

@@ -27,6 +27,8 @@ const mem = new Map<string, string>()
 const server = { ciphertext: '', iv: '', rev: 0 }
 let puts = 0
 let rejected = 0
+/** PUT の応答を返す直前に一度だけ走らせる細工（送信中に起きる出来事を作る） */
+let duringPut: (() => Promise<void> | void) | null = null
 
 const realFetch = globalThis.fetch
 ;(globalThis as any).fetch = async (_url: string, init?: RequestInit) => {
@@ -46,10 +48,15 @@ const realFetch = globalThis.fetch
   server.ciphertext = body.ciphertext
   server.iv = body.iv
   server.rev++
-  return Response.json({ ok: true, rev: server.rev })
+  const accepted = server.rev
+  // ⚠ 細工は**書き込みが通った後・応答を返す前**に走らせる。前に走らせると 409 になり、
+  // 検査したい「成功したのに巻き戻す」分岐を通らない（実際に一度そう書いて素通りした）
+  if (duringPut) { const f = duringPut; duringPut = null; await f() }
+  return Response.json({ ok: true, rev: accepted })
 }
 
-const { pull, push, commitLocal, localState, isDirty } = await import('../src/client/store')
+const { pull, push, commitLocal, localState, isDirty, applyRemote } =
+  await import('../src/client/store')
 const { seal, open } = await import('../src/box')
 const { deriveKeys } = await import('../src/keys')
 import type { RoomState, Session, Booking } from '../src/client/api'
@@ -97,6 +104,7 @@ beforeEach(async () => {
   server.rev = 0
   puts = 0
   rejected = 0
+  duringPut = null
   await serverHolds(empty)
 })
 
@@ -170,5 +178,39 @@ describe('送っている間に自分が足した記録', () => {
 
     expect(await push(s)).toBe('synced')
     expect((await serverState()).bookings.map((b) => b.description)).toEqual(['居酒屋', '朝食'])
+  })
+})
+
+
+/**
+ * 🔴 **送っている間に取り込んだ「自分の応答より新しい版」を巻き戻さないこと。**
+ *
+ * 巻き戻すと土台（base）が実際に見た版より古くなり、次のマージで
+ * **消したはずの記録が復活する**（2026-09-07 のレビューで実測された壊れ方）。
+ */
+describe('送信中に相手の版が届いた時', () => {
+  const withB = (bs: Booking[]): RoomState => ({ ...empty, bookings: bs })
+
+  it('土台と版を巻き戻さない（消した記録が復活しない）', async () => {
+    await serverHolds(withB([bk('X', '宿')]))
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, withB([bk('X', '宿'), bk('M', '自分の記録')]))
+
+    // 送信中に、相手がさらに書いた版が WebSocket で届く
+    duringPut = async () => {
+      await serverHolds(withB([bk('X', '宿'), bk('M', '自分の記録'), bk('T', '相手の記録')]))
+      applyRemote(ROOM, withB([bk('X', '宿'), bk('M', '自分の記録'), bk('T', '相手の記録')]), server.rev)
+    }
+    await push(s)
+
+    const localRev = JSON.parse(mem.get('michizure.state.' + ROOM)!).rev
+    const base = JSON.parse(mem.get('michizure.state.' + ROOM)!).base.bookings.map((b: Booking) => b.id)
+    expect(localRev).toBe(server.rev)      // 巻き戻っていない
+    expect(base.sort()).toEqual(['M', 'T', 'X'])  // 土台は「実際に見た版」
+
+    // ここで相手の記録を消して送ると、土台が正しければ消えたまま送れる
+    commitLocal(ROOM, withB([bk('X', '宿'), bk('M', '自分の記録')]))
+    await push(s)
+    expect((await serverState()).bookings.map((b) => b.id).sort()).toEqual(['M', 'X'])
   })
 })

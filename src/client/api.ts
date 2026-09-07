@@ -39,7 +39,7 @@ export function emptyState(name: string): RoomState {
 export async function createRoom(
   passphrase: string,
   state: RoomState,
-): Promise<Session & { salt: string }> {
+): Promise<Session & { salt: string; rev: number }> {
   const salt = generateSaltB64()
   const { authKey, encKeyBits } = await deriveKeys(passphrase, salt, PBKDF2_ITERATIONS)
   const blob = { ...(await seal(encKeyBits, state)), blobVersion: 1 }
@@ -54,8 +54,8 @@ export async function createRoom(
       kdfVersion: KDF_VERSION,
     }),
   })
-  const { roomId, token } = await json<{ roomId: string; token: string }>(res)
-  return { roomId, token, encKeyBits, salt }
+  const { roomId, token, rev } = await json<{ roomId: string; token: string; rev: number }>(res)
+  return { roomId, token, encKeyBits, salt, rev }
 }
 
 function generateSaltB64(): string {

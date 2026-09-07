@@ -34,7 +34,13 @@ let target: { s: Session; h: Handlers } | null = null
  * **描画のたびに接続が増えて溜まる**（サーバー側の監査で実際に見つけた形）。
  */
 export function connectLive(s: Session, h: Handlers): void {
-  if (socket && roomOf === s.roomId) {
+  // ⚠ **繋ぎ先の更新を早期 return より前に置く。** 後ろに置くと、同じ部屋で
+  // セッション（トークン）が差し替わった時に、繋ぎ直しが古いトークンを使い続ける
+  // （2026-09-07 のレビューで指摘）。圏外入室 → 正式入室がまさにこの形。
+  const changed = !target || target.s.token !== s.token
+  target = { s, h }
+
+  if (socket && roomOf === s.roomId && !changed) {
     const st = socket.readyState
     if (st === WebSocket.OPEN || st === WebSocket.CONNECTING) return
   }

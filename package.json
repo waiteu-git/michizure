@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
-    "build:client": "rm -f public/app.js public/chunk-*.js && node scripts/build-html.mjs && esbuild src/client/app.ts --bundle --splitting --format=esm --charset=utf8 --minify --outdir=public --entry-names=app --chunk-names=chunk-[hash] && node scripts/build-sw.mjs",
+    "build:client": "rm -f public/app.js public/chunk-*.js && node scripts/build-html.mjs && esbuild src/client/app.ts --bundle --splitting --format=esm --charset=utf8 --minify --outdir=public --entry-names=app --chunk-names=chunk-[hash] --metafile=.build-meta.json && node scripts/build-sw.mjs",
     "build:shell": "node scripts/check-shell-config.mjs && npm run build:client && npx cap sync",
     "open:ios": "npx cap open ios",
     "open:android": "npx cap open android"

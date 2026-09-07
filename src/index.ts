@@ -79,10 +79,13 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
     }),
   })
   if (!res.ok) return Response.json({ error: 'create_failed' }, { status: 500 })
+  // ⚠ DO が採番した版をそのまま渡す。ここで数え直さない（数える主体は1つ）
+  const { rev } = (await res.json()) as { rev?: number }
 
   return Response.json({
     roomId,
     token: await issueToken(roomId, env.TOKEN_SECRET, TOKEN_TTL_MS, now),
+    rev: rev ?? 0,
   })
 }
 

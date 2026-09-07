@@ -13,7 +13,8 @@ const mem = new Map<string, string>()
   },
 }
 
-const { commitLocal, applyRemote, localState, isDirty } = await import('../src/client/store')
+const { commitLocal, applyRemote, localState, isDirty, adoptRemote, takePendingConflicts } =
+  await import('../src/client/store')
 import type { RoomState } from '../src/client/api'
 
 const base: RoomState = { name: '旅', startDate: null, endDate: null, members: [], bookings: [] }
@@ -102,5 +103,84 @@ describe('同じ版が二度届いた時', () => {
     // 同じ版がもう一方の経路から届く
     expect(applyRemote(ROOM, theirs, nextRev())).toBe('ahead')
     expect(localState(ROOM)?.members).toHaveLength(2)
+  })
+})
+
+
+/**
+ * 🔴 衝突した時に、**解けた分まで捨てない**こと。
+ *
+ * 以前は merge3 の併合結果ごと捨てて何も書かずに返していた。すると相手が別に足した
+ * 記録がローカルに入らないまま、解決画面が「今サーバーで見た版」を名乗って送るので、
+ * **サーバーからも相手の記録が消えた**（2026-09-07 のレビューで実測）。
+ */
+describe('衝突した時に残る物', () => {
+  beforeEach(() => { mem.clear(); rev = 0 })
+
+  const bk = (id: string, amount: number) => ({
+    id, category: '食費', description: '夕食', payer: 'a', amount,
+    participants: ['a'], paid: {},
+  })
+  const room = (bs: ReturnType<typeof bk>[]): RoomState => ({
+    name: '旅', startDate: null, endDate: null, members: [{ id: 'a', name: 'わ' }], bookings: bs,
+  })
+
+  it('相手が別に足した記録は、衝突していないので残る', () => {
+    adoptRemote(ROOM, room([bk('Y', 3000)]), 1)
+    commitLocal(ROOM, room([bk('Y', 4000)]))                       // 自分が直した
+    expect(applyRemote(ROOM, room([bk('Y', 5000), bk('Z', 800)]), 2)).toBe('conflict')
+
+    const got = localState(ROOM)!.bookings
+    // Z（相手の別の追加）が入っていること。ここが空だと、解決時に消える
+    expect(got.map((b) => b.id).sort()).toEqual(['Y', 'Z'])
+    // 解けなかった Y は暫定的に自分の版（画面から消さない）
+    expect(got.find((b) => b.id === 'Y')!.amount).toBe(4000)
+  })
+
+  it('見た版を控えるので、解決した結果を送れる', () => {
+    adoptRemote(ROOM, room([bk('Y', 3000)]), 1)
+    commitLocal(ROOM, room([bk('Y', 4000)]))
+    applyRemote(ROOM, room([bk('Y', 5000)]), 2)
+    // 控えていないと、次の送信が永久に 409 になって詰む
+    expect(JSON.parse(mem.get('michizure.state.' + ROOM)!).rev).toBe(2)
+  })
+
+  it('解けなかった予約は1件だけ渡される', () => {
+    adoptRemote(ROOM, room([bk('Y', 3000)]), 1)
+    commitLocal(ROOM, room([bk('Y', 4000)]))
+    applyRemote(ROOM, room([bk('Y', 5000), bk('Z', 800)]), 2)
+    const list = takePendingConflicts(ROOM)
+    expect(list).toHaveLength(1)
+    expect(list[0].mine?.amount).toBe(4000)
+    expect(list[0].theirs?.amount).toBe(5000)
+  })
+})
+
+/**
+ * ⚠ 取ったら消すこと。消さないと**別の部屋を開いた時に前の部屋の予約が解決パネルへ出る**。
+ */
+describe('解けなかった予約の受け渡し', () => {
+  beforeEach(() => { mem.clear(); rev = 0 })
+  const bk = (id: string, amount: number) => ({
+    id, category: '食費', description: '', payer: 'a', amount, participants: ['a'], paid: {},
+  })
+  const room = (bs: ReturnType<typeof bk>[]): RoomState => ({
+    name: '旅', startDate: null, endDate: null, members: [{ id: 'a', name: 'わ' }], bookings: bs,
+  })
+  const stage = () => {
+    adoptRemote(ROOM, room([bk('Y', 3000)]), 1)
+    commitLocal(ROOM, room([bk('Y', 4000)]))
+    applyRemote(ROOM, room([bk('Y', 5000)]), 2)
+  }
+
+  it('二度目は空（取ったら消える）', () => {
+    stage()
+    expect(takePendingConflicts(ROOM)).toHaveLength(1)
+    expect(takePendingConflicts(ROOM)).toHaveLength(0)
+  })
+
+  it('別の部屋には渡さない', () => {
+    stage()
+    expect(takePendingConflicts('ROOM0000000000BB')).toHaveLength(0)
   })
 })

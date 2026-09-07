@@ -38,6 +38,7 @@ import {
   dropLocal,
   conflictSides,
   resolveKeepMine,
+  resolveBookings,
   resolveTakeTheirs,
   type SyncStatus,
 } from './store.ts'
@@ -216,7 +217,10 @@ async function doCreate() {
       iterations: PBKDF2_ITERATIONS,
       kdfVersion: KDF_VERSION,
     })
-    commitLocal(s.roomId, state)
+    // 🔴 `commitLocal` を使ってはいけない。あれは base=null / rev=0 / dirty=true を書くので、
+    // **作った本人の最初の送信が必ず 409 になり、土台が無いのでマージもできず永久に詰む**
+    // （2026-09-07 のレビューで発見。サーバーは create の時点で既に版1を持っている）
+    adoptRemote(s.roomId, state, s.rev)
     ;($('shownPass') as HTMLElement).textContent = passphrase
     ;($('shownUrl') as HTMLElement).textContent = `${shareOrigin()}/r/${s.roomId}`
     // 圏外入室券（設計 §9.1）。中身は載せない＝QR が小さく、実機で読める
@@ -252,7 +256,7 @@ async function doJoin() {
       if (r === 'merged') toast('相手の記録と合わせました')
       renderSync(isDirty(roomId) ? 'pending' : 'synced')
       renderRoom()
-      if (isDirty(roomId)) void push(session, clientId).then(renderSync)
+      if (isDirty(roomId)) void push(session, clientId).then(afterPush(session))
     } else {
       const loaded = await loadState(session)
       state = loaded.state
@@ -349,7 +353,7 @@ async function resync(s: Session): Promise<void> {
   state = localState(s.roomId)
   renderRoom()
   renderSync(isDirty(s.roomId) ? 'pending' : 'synced')
-  if (isDirty(s.roomId)) void push(s, clientId).then(renderSync)
+  if (isDirty(s.roomId)) void push(s, clientId).then(afterPush(s))
 }
 
 /**
@@ -450,7 +454,7 @@ async function toggleQr() {
  * ⚠ 以前は「この端末（3人・記録5件）／他の端末（…）選ばなかったほうは消えます」と、
  * 数だけを見せて一晩ぶんの記録を捨てさせていた。件数は中身の代わりにならない。
  */
-function showBookingConflicts(s: import('./api.ts').Session, list: BookingConflict[], rev: number) {
+function showBookingConflicts(s: import('./api.ts').Session, list: BookingConflict[]) {
   const nameOf = (id: string) => state?.members.find((m) => m.id === id)?.name ?? '?'
   const show = (b: Booking | null) =>
     b
@@ -492,11 +496,14 @@ function showBookingConflicts(s: import('./api.ts').Session, list: BookingConfli
       else if (at >= 0) local.bookings[at] = b
       else local.bookings.push(b)
     }
-    resolveKeepMine(s.roomId, local, rev)
+    // ⚠ `resolveKeepMine` を使ってはいけない。あれは「今サーバーにある版」を名乗るので、
+    // **取り込んでいない相手の記録まで上書きして消す**（2026-09-07 のレビューで実測）。
+    // 件別の解決はマージ済みの上に載るので、控えてある版のままでよい
+    resolveBookings(s.roomId, local)
     state = local
     $('conflict').hidden = true
     renderRoom()
-    void push(s, clientId).then(renderSync)
+    void push(s, clientId).then(afterPush(s))
   }
 }
 
@@ -505,12 +512,15 @@ async function showConflict(s: import('./api.ts').Session) {
 
   // 🔴 件単位で解けた分は既にマージ済み。ここへ来るのは
   // **同じ1件を双方が別々に直した**時だけ。丸ごと選ばせるのは土台が無い時に限る。
-  const perBooking = takePendingConflicts()
-  // ⚠ サーバーで見た版を持って解決へ渡す。持たないと、選んだ結果を送れない
-  const sides = await conflictSides(s)
-  if (perBooking.length) return showBookingConflicts(s, perBooking, sides.rev)
+  // 🔴 **件別の衝突は通信せずに出す。** マージは既にローカルで済んでおり、版も控えてある。
+  // ここで通信を挟むと、電波が切れた瞬間に起きた衝突の解決手段が画面に出ない
+  // （2026-09-07 のレビューで指摘。まさに圏外で起きる衝突を解けなくしていた）。
+  const perBooking = takePendingConflicts(s.roomId)
+  if (perBooking.length) return showBookingConflicts(s, perBooking)
 
+  // 丸ごと選ぶ経路（土台が無い時）だけは、相手の版を取りに行く必要がある
   const count = (x: RoomState) => `${x.members.length}人・記録${x.bookings.length}件`
+  const sides = await conflictSides(s)
   $('conflict').innerHTML = `
     <div class="warn">
       <b>この端末の変更と、他の端末の変更が食い違っています。</b>
@@ -529,7 +539,7 @@ async function showConflict(s: import('./api.ts').Session) {
     state = mine
     $('conflict').hidden = true
     renderRoom()
-    void push(s, clientId).then(renderSync)
+    void push(s, clientId).then(afterPush(s))
   }
   $('takeTheirs').onclick = async () => {
     // 押した時点のサーバー側を取り直す。表示していた版はもう古いかもしれない
@@ -579,6 +589,11 @@ async function handleImportFile(file: File) {
 /** 同じ部屋を開いている端末からの変更を受け取る */
 function startLive() {
   if (!session) return
+  // 🔴 圏外入室（設計 §9.1）で入った部屋は token を持たない。繋ごうとしても
+  // サーバーは必ず断るので、**成功しようのない再接続が延々と回り続ける**
+  // （電池と通信量を使い切る。2026-09-07 のレビューで発見）。
+  // 正式に入り直すと token が入り、その時の renderRoom で繋がる。
+  if (!session.token) return
   const s = session
   connectLive(s, {
     onStatus: (connected) => {
@@ -593,14 +608,14 @@ function startLive() {
         if (result === 'conflict') return void showConflict(s)
         // 'ahead' ＝相手は動いていない。取り込むものは無いが、ローカルの変更も捨てない。
         // ここで state を remote に差し替えると、**入力したばかりの記録が画面から消える**
-        if (result === 'ahead') return void push(s, clientId).then(renderSync)
+        if (result === 'ahead') return void push(s, clientId).then(afterPush(s))
         // 'merged' ＝双方の追加が黙って併合された。**利用者に聞くことは何も無い。**
         // 画面はマージ結果（＝ローカル）を映し、送り返す
         if (result === 'merged') {
           state = localState(s.roomId)
           renderRoom()
           toast('相手の記録と合わせました')
-          return void push(s, clientId).then(renderSync)
+          return void push(s, clientId).then(afterPush(s))
         }
         state = remote
         renderRoom()
@@ -632,7 +647,9 @@ let entryAsked = ''
 function warmForOffline(roomId: string): void {
   if (!navigator.onLine) return
 
-  // ① QR を描くコード。遅延 chunk なので、触らないと Service Worker が蓄えない
+  // ① QR を描くコード。**主な保証は sw.js の先読み**（scripts/build-sw.mjs の
+  //    OFFLINE_CRITICAL）。ここはその予備＝Service Worker がまだ有効でない初回や、
+  //    登録に失敗した環境のために、電波のあるうちに触っておく
   if (!qrWarmed) {
     qrWarmed = true
     void qrModule().catch(() => (qrWarmed = false))
@@ -786,7 +803,22 @@ function persist() {
   if (!session || !state) return
   commitLocal(session.roomId, state)
   renderSync('pending')
-  void push(session, clientId).then(renderSync)
+  void push(session, clientId).then(afterPush(session))
+}
+
+/**
+ * 🔴 **`push` が返す 'conflict' を捨てない。**
+ *
+ * 以前は全ての呼び出しが `.then(renderSync)` だけで、renderSync は帯の文字を
+ * 書き換えるだけだった。だから送信中に衝突が起きると、**「食い違っています」と
+ * 出るのに選ぶ手段が無く、以後その端末は1件もサーバーへ届かなくなった**
+ * （2026-09-07 のレビューで発見。WebSocket が塞がれた網では恒久化する）。
+ */
+function afterPush(s: import('./api.ts').Session) {
+  return (status: SyncStatus) => {
+    if (status === 'conflict') return void showConflict(s)
+    renderSync(status)
+  }
 }
 
 function renderSync(status: SyncStatus) {
