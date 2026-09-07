@@ -13,6 +13,25 @@
     <!-- API の宛先。Web 配信では空＝相対パス。ネイティブのシェルへ入れる時だけ配信元を入れる -->
     <meta name="michizure-api-base" content="" />
     <title>Michizure — 旅の費用を、道連れと</title>
+
+    <!--
+      ホーム画面へ追加して、ブラウザの枠なしで開けるようにする。
+      ⚠ パスは絶対（`/…`）にすること。/r/<部屋ID> で開かれた時、相対だと
+      `/r/icons/…` を見に行って全部 404 になる。
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- ⚠ iOS はホーム画面のアイコンに manifest ではなく apple-touch-icon を見る -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icons/michizure.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Michizure" />
+    <!--
+      ⚠ manifest の theme_color は1色しか持てないが、この app は暗い配色にも
+      切り替わる。meta なら明暗で出し分けられるので、両方書く。
+    -->
+    <meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)" />
     <style>
       :root {
         --bg: #fbfaf8;

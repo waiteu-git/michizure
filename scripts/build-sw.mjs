@@ -65,7 +65,11 @@ const criticalChunks = OFFLINE_CRITICAL.map((src) => {
 })
 
 const files = [...new Set([...staticClosure('app.js'), ...criticalChunks])]
-const assets = ['/', ...files.map((f) => `/${f}`)]
+// JS 以外で圏外に要る物。⚠ アイコンは入れない＝端末に入れた時点で OS が持つし、
+// 512px の PNG を毎回のインストールで運ぶ理由が無い（使われれば fetch 側が蓄える）
+const STATIC_EXTRA = ['/manifest.webmanifest']
+
+const assets = ['/', ...files.map((f) => `/${f}`), ...STATIC_EXTRA]
 
 // ⚠ 「一覧に足した」と「一覧に載った」は別。載ったことまで確かめてから書き出す
 for (const c of criticalChunks) {

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npm run build:client && wrangler dev",
     "deploy": "npm run build:client && wrangler deploy",
-    "pretest": "node scripts/check-privacy-config.mjs && node scripts/check-wordlist.mjs",
+    "pretest": "node scripts/check-privacy-config.mjs && node scripts/check-wordlist.mjs && node scripts/check-icons.mjs",
     "build:wordlist": "node scripts/build-wordlist.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
