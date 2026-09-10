@@ -61,7 +61,17 @@ export class Room extends DurableObject {
    */
   private writeBlob(blob: Blob): number {
     const next = this.rev() + 1
-    this.put('blob', blob)
+    /**
+     * 🔴 **受け取った物をそのまま保存しない。欄を3つに揃えてから書く。**
+     *
+     * 以前は PUT だけが揃えていて、create と WS は受け取ったオブジェクトを丸ごと保存していた。
+     * 公式のクライアントは3欄しか送らないが、**改変したクライアントなら暗号化していない欄を
+     * 足して保存させられた**＝「サーバーは暗号文だけを持つ」とプライバシーポリシーに書けなくなる
+     * （2026-09-10 の PP×実装の突き合わせ監査で指摘）。保存項目の歯止め
+     * （test/stored-fields.test.ts）は公式の流れしか通していないので、ここは検査の外だった。
+     * ⇒ 経路ごとに揃えると、いつか1本忘れる。**3経路が必ず通るここで揃える。**
+     */
+    this.put('blob', { ciphertext: blob.ciphertext, iv: blob.iv, blobVersion: blob.blobVersion })
     this.put('rev', next)
     return next
   }
@@ -194,11 +204,25 @@ export class Room extends DurableObject {
   }
 
   private async handlePutBlob(request: Request): Promise<Response> {
-    if (this.get<Blob>('blob') === null) {
+    if (this.get<RoomMeta>('meta') === null) {
       return Response.json({ error: 'not_found' }, { status: 404 })
     }
     // 中身は読まない。読めない。形とサイズだけ見る
     const body = (await request.json()) as Blob & { baseRev?: unknown }
+
+    /**
+     * 🔴 **待った後に、部屋がまだ在るか確かめ直す。**
+     *
+     * 本文の読み込みはストレージ操作ではないので、DO の入力ゲートはその間閉じない＝
+     * **待っている間に削除や期限切れの alarm が走りうる**。確かめ直さないと、空になった
+     * 保存領域へ版0からの書き込み（圏外入室の直後など）が通り、**meta も auth も alarm も無い
+     * blob と rev が残る**。alarm が無いので1年の自動削除の対象にもならず、期限なしで残る
+     * （2026-09-10 の監査で指摘）。
+     * ⚠ 在るかどうかは blob でなく meta で見る。meta は作成で書かれ、削除で必ず消える。
+     */
+    if (this.get<RoomMeta>('meta') === null) {
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
     if (blobShapeInvalid(body)) {
       return Response.json({ error: 'invalid_blob' }, { status: 400 })
     }
@@ -219,7 +243,7 @@ export class Room extends DurableObject {
       return Response.json({ error: 'stale', rev: current }, { status: 409 })
     }
 
-    // ⚠ baseRev は保存しない（暗号文の一部ではない）。形を揃えてから書く
+    // ⚠ baseRev などの余分な欄は writeBlob が落とす（中継も揃えた形で送る）
     const blob: Blob = { ciphertext: body.ciphertext, iv: body.iv, blobVersion: body.blobVersion }
     const rev = this.writeBlob(blob)
     // 🔴 PUT でも中継する。しないと「同じ部屋を開いている人に届かない」ため
@@ -301,8 +325,10 @@ export class Room extends DurableObject {
       ws.send(JSON.stringify({ type: 'error', code: 'stale', rev: current }))
       return
     }
-    const rev = this.writeBlob(msg.blob!)
-    this.broadcast(msg.blob!, rev, ws)
+    const blob: Blob = { ciphertext: msg.blob!.ciphertext, iv: msg.blob!.iv, blobVersion: msg.blob!.blobVersion }
+    const rev = this.writeBlob(blob)
+    // ⚠ 中継も揃えた形で送る。受け取った物をそのまま他の端末へ流すと、余分な欄が届く
+    this.broadcast(blob, rev, ws)
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {

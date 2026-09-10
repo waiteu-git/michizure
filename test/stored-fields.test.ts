@@ -94,3 +94,111 @@ describe('サーバーが保存するもの', () => {
     expect(rev).toBe(2)
   })
 })
+
+/**
+ * 🔴 **改変したクライアントでも、保存は宣言どおりに揃うこと。**
+ *
+ * 以前は create と WS が受け取ったオブジェクトを丸ごと保存していた＝暗号化していない欄を
+ * 足して保存させられた（2026-09-10 の監査で指摘）。上のテストは公式の流れしか通さないので、
+ * ここでは**わざと余分な欄を付けて**3経路とも叩く。
+ */
+describe('改変したクライアントが余分な欄を足しても', () => {
+  const EXTRA = { plaintext: '山田太郎・居酒屋・6000円', debug: { note: 'わざと足した欄' } }
+
+  async function blobKeysOf(roomId: string) {
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
+    const dump = JSON.parse(await runInDurableObject(stub, (i: Room) => i.dumpForTest())) as {
+      room: { key: string; value: string }[]
+    }
+    return Object.keys(JSON.parse(dump.room.find((r) => r.key === 'blob')!.value)).sort()
+  }
+
+  async function createWith(extra: object) {
+    const salt = generateSalt()
+    const { authKey, encKeyBits } = await deriveKeys('あいことば', salt, FAST)
+    const blob = { ...(await seal(encKeyBits, { name: '作成' })), blobVersion: 1, ...extra }
+    const res = await SELF.fetch('https://example.com/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salt, authKey, blob, iterations: FAST, kdfVersion: 1 }),
+    })
+    return { ...((await res.json()) as { roomId: string; token: string; rev: number }), encKeyBits }
+  }
+
+  it('作成の経路でも、保存される暗号文は3欄だけ', async () => {
+    const room = await createWith(EXTRA)
+    expect(await blobKeysOf(room.roomId)).toEqual(['blobVersion', 'ciphertext', 'iv'])
+  })
+
+  it('PUT の経路でも3欄だけ', async () => {
+    const room = await createWith({})
+    await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${room.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(await seal(room.encKeyBits, { name: '更新' })), blobVersion: 1, baseRev: room.rev, ...EXTRA }),
+    })
+    expect(await blobKeysOf(room.roomId)).toEqual(['blobVersion', 'ciphertext', 'iv'])
+  })
+
+  it('WebSocket の経路でも3欄だけ（しかも他の端末へ中継される物も3欄だけ）', async () => {
+    const room = await createWith({})
+    const open = async (client: string) => {
+      const res = await SELF.fetch(
+        `https://example.com/api/rooms/${room.roomId}/ws?token=${encodeURIComponent(room.token)}&client=${client}`,
+        { headers: { Upgrade: 'websocket' } },
+      )
+      const ws = res.webSocket!
+      const got: any[] = []
+      ws.addEventListener('message', (e) => got.push(JSON.parse(String(e.data))))
+      ws.accept()
+      return { ws, got }
+    }
+    const writer = await open('writer')
+    const reader = await open('reader')
+    await new Promise((r) => setTimeout(r, 100))
+    writer.ws.send(JSON.stringify({
+      type: 'update',
+      blob: { ...(await seal(room.encKeyBits, { name: 'WSから' })), blobVersion: 1, ...EXTRA },
+      baseRev: room.rev,
+    }))
+    await new Promise((r) => setTimeout(r, 200))
+    expect(await blobKeysOf(room.roomId)).toEqual(['blobVersion', 'ciphertext', 'iv'])
+    const relayed = reader.got.find((m) => m.type === 'update')
+    expect(relayed, '他の端末に中継が届いていること').toBeTruthy()
+    expect(Object.keys(relayed.blob).sort()).toEqual(['blobVersion', 'ciphertext', 'iv'])
+    writer.ws.close(); reader.ws.close()
+  })
+})
+
+/**
+ * 🔴 **部屋が消えた後の書き込みを受けない。**
+ *
+ * PUT は本文を待っている間に削除や期限切れが走りうる（本文の読み込み中は DO の入力ゲートが
+ * 閉じない）。待った後に確かめ直さないと、meta も auth も alarm も無い blob と rev が残り、
+ * 1年の自動削除の対象にもならない（2026-09-10 の監査で指摘）。
+ * ⚠ 交互の順序そのものは再現しにくいので、**「在るかどうかを blob でなく meta で見る」**ことを
+ * 固定する＝meta だけが消えた状態で PUT を送り、断られることを確かめる。
+ */
+describe('部屋が消えた後の書き込み', () => {
+  it('meta が無い部屋への PUT は断る（blob が残っていても）', async () => {
+    const salt = generateSalt()
+    const { authKey, encKeyBits } = await deriveKeys('あいことば', salt, FAST)
+    const created = (await (
+      await SELF.fetch('https://example.com/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salt, authKey, blob: { ...(await seal(encKeyBits, { name: '作成' })), blobVersion: 1 }, iterations: FAST, kdfVersion: 1 }),
+      })
+    ).json()) as { roomId: string; token: string; rev: number }
+    const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
+    // 削除が途中まで走った状態を作る（meta だけ消す）
+    await runInDurableObject(stub, (i: Room) => (i as any).sql().exec("DELETE FROM room WHERE key = 'meta'"))
+
+    const res = await SELF.fetch(`https://example.com/api/rooms/${created.roomId}/blob`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${created.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(await seal(encKeyBits, { name: '消えた後' })), blobVersion: 1, baseRev: created.rev }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
