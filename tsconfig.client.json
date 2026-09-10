@@ -22,6 +22,7 @@
     "test/local-store.test.ts",
     "test/live.test.ts",
     "test/push-retry.test.ts",
-    "test/session-store.test.ts"
+    "test/session-store.test.ts",
+    "test/device-stored-fields.test.ts"
   ]
 }
