@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  🔴 端末の控えを、端末の外へ出さない（2026-09-10）。
+
+  WebView の localStorage には、部屋の中身の**平文**・同期の土台（これも平文）・**暗号を解く鍵**・
+  接続用のトークンが入る。Android の既定の自動バックアップに乗ると Google アカウントへ、
+  機種変更の端末間転送に乗ると新しい端末へ、**写しができる**。「この端末から消す」はその写しに
+  届かず、復元すると控えと鍵が戻る＝プライバシーポリシーの「端末の中だけ」が嘘になる。
+
+  ⚠ targetSdk 31 以上では android:allowBackup="false" だけでは**端末間転送が止まらない**。
+  ここで cloud-backup と device-transfer の両方から全ての領域を除く。
+  ⚠ 失うもの: 機種変更で部屋の控えが引き継がれない。合言葉で入り直せば戻る（設計どおり）。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>
