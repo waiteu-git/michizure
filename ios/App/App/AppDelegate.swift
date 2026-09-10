@@ -7,8 +7,34 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        excludeWebViewDataFromBackup()
         return true
+    }
+
+    /**
+     🔴 端末の控えを、端末の外へ出さない（2026-09-10）。
+
+     WebView の保存領域（Library/WebKit）には、部屋の中身の**平文**・同期の土台（これも平文）・
+     **暗号を解く鍵**・接続用のトークンが入る。iOS は既定でこれを iCloud バックアップに含めるので、
+     端末の外に写しができ、「この端末から消す」がその写しに届かない。
+     ⇒ プライバシーポリシーの「端末の中だけ」が嘘になる（Android でも同じ欠陥があり、先に直した）。
+
+     ⚠ 印を付けられるのは在る物だけなので、まだ無ければ先に作る。
+     ⚠ 起動のたびに付け直す。WebKit が領域を作り直した場合に印が落ちるため。
+     ⚠ 失うもの: 機種変更で部屋の控えが引き継がれない。合言葉で入り直せば戻る（設計どおり）。
+     */
+    private func excludeWebViewDataFromBackup() {
+        let fm = FileManager.default
+        guard let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
+        var dir = library.appendingPathComponent("WebKit", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try dir.setResourceValues(values)
+        } catch {
+            NSLog("Michizure: WebView の保存領域をバックアップから外せなかった: \(error)")
+        }
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
