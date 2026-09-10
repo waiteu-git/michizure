@@ -202,8 +202,12 @@ async function handleWebSocket(request: Request, env: Env, roomId: string): Prom
  *
  * ⚠ 面は3つある（robots.txt / meta タグ / このヘッダ）。**robots.txt はお願いでしかなく**、
  * meta タグは HTML にしか効かない。ヘッダは API の応答にも効く。
- * グレーゾーン解消制度の事前相談中は「非公開・宣伝なし」が条件なので、
- * 検索結果に出ることは条件そのものを壊す。
+ * 根拠＝**2026-09-04 のユーザー裁定「非公開開発のみ先行可」**。本人が再裁定するまで
+ * 生きている。検索結果に出ることは、この裁定そのものを壊す。
+ *
+ * ⚠ 以前の根拠（グレーゾーン解消制度の事前相談中は「非公開・宣伝なし」が条件）は
+ * **2026-09-10 に METI が制度の適用不可を回答して消えた**。だが**裁定は根拠の一部が
+ * 消えただけで生きている**。⇒ ここを外すのは、本人の再裁定が出てから。
  */
 function noIndex(res: Response): Response {
   const out = new Response(res.body, res)
