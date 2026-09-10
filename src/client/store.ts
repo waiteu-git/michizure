@@ -1,4 +1,4 @@
-import { loadState, saveState, StaleError, type RoomState, type Session } from './api.ts'
+import { loadState, saveState, StaleError, RoomGoneError, type RoomState, type Session } from './api.ts'
 import { merge3, type BookingConflict } from './merge.ts'
 import type { Booking } from './api.ts'
 
@@ -40,7 +40,7 @@ type Local = {
   dirty: boolean
 }
 
-export type SyncStatus = 'synced' | 'pending' | 'offline' | 'conflict'
+export type SyncStatus = 'synced' | 'pending' | 'offline' | 'conflict' | 'gone'
 
 function read(roomId: string): Local | null {
   try {
@@ -51,7 +51,25 @@ function read(roomId: string): Local | null {
   }
 }
 
+/**
+ * 🔴 **「この端末から消す」を押した部屋へは、このページの間もう書かない。**
+ *
+ * 押した時点では控えは消える。だが**その部屋の取り込みが通信中**だと、応答が返った時に
+ * 「控えが無い＝初めて見る部屋」と判断して平文の控えを書き戻していた。書き戻された控えは
+ * 入口の一覧に載らないので、**もう「この端末から消す」では消せない孤児**になる
+ * （2026-09-10 の PP×実装の監査で指摘）。遅れて届く応答は止められないので、書く所で止める。
+ * ⚠ 本人が合言葉で入り直した時は `revive` で解く（明示の操作は止めない）。
+ */
+const forgotten = new Set<string>()
+export function markForgotten(roomId: string): void {
+  forgotten.add(roomId)
+}
+export function revive(roomId: string): void {
+  forgotten.delete(roomId)
+}
+
 function write(roomId: string, local: Local): void {
+  if (forgotten.has(roomId)) return
   localStorage.setItem(KEY(roomId), JSON.stringify(local))
 }
 
@@ -167,11 +185,14 @@ export async function push(s: Session, clientId = '', tries = 2): Promise<SyncSt
     )
     return advanced || moved ? 'pending' : 'synced'
   } catch (e) {
+    // ⚠ 部屋が消えていたら、送り直しても意味が無い。呼び出し側に知らせる
+    if (e instanceof RoomGoneError) return 'gone'
     if (e instanceof StaleError && tries > 0) {
       let again: Awaited<ReturnType<typeof pull>>
       try {
         again = await pull(s)
-      } catch {
+      } catch (e2) {
+        if (e2 instanceof RoomGoneError) return 'gone'
         return navigator.onLine ? 'pending' : 'offline'
       }
       // 同じ1件を双方が直していた＝利用者に選ばせる。勝手に決めない

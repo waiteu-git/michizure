@@ -13,7 +13,7 @@ const mem = new Map<string, string>()
   },
 }
 
-const { commitLocal, applyRemote, localState, isDirty, adoptRemote, takePendingConflicts } =
+const { commitLocal, applyRemote, localState, isDirty, adoptRemote, takePendingConflicts, markForgotten, revive } =
   await import('../src/client/store')
 import type { RoomState } from '../src/client/api'
 
@@ -182,5 +182,38 @@ describe('解けなかった予約の受け渡し', () => {
   it('別の部屋には渡さない', () => {
     stage()
     expect(takePendingConflicts('ROOM0000000000BB')).toHaveLength(0)
+  })
+})
+
+
+/**
+ * 🔴 **「この端末から消す」を押した部屋へ、遅れて届いた応答で書き戻さない。**
+ * 以前は通信中の取り込みが返ると平文の控えを書き戻し、入口の一覧に載らない孤児ができた
+ * （＝もう「この端末から消す」では消せない。2026-09-10 の監査で指摘）。
+ */
+describe('この端末から消した部屋', () => {
+  const GONE = 'ROOM0000000000GG'
+  beforeEach(() => { mem.clear(); revive(GONE) })
+
+  it('印を付けた後は、遅れて届いた応答でも書き戻さない', () => {
+    markForgotten(GONE)
+    applyRemote(GONE, withMember('遅れて届いた'), nextRev())
+    adoptRemote(GONE, withMember('遅れて届いた'), nextRev())
+    commitLocal(GONE, withMember('遅れて届いた'))
+    expect(localState(GONE)).toBeNull()
+    expect(mem.has('michizure.state.' + GONE)).toBe(false)
+  })
+
+  it('本人が入り直せば（revive）、また書ける', () => {
+    markForgotten(GONE)
+    revive(GONE)
+    adoptRemote(GONE, withMember('入り直した'), nextRev())
+    expect(localState(GONE)?.members[0].name).toBe('入り直した')
+  })
+
+  it('印は部屋ごと（別の部屋は止めない）', () => {
+    markForgotten(GONE)
+    adoptRemote(ROOM, withMember('別の部屋'), nextRev())
+    expect(localState(ROOM)?.members[0].name).toBe('別の部屋')
   })
 })

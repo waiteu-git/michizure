@@ -1,4 +1,5 @@
 import {
+  RoomGoneError,
   createRoom,
   enterRoom,
   loadState,
@@ -39,6 +40,8 @@ import {
   conflictSides,
   resolveKeepMine,
   resolveBookings,
+  markForgotten,
+  revive,
   resolveTakeTheirs,
   type SyncStatus,
 } from './store.ts'
@@ -240,6 +243,10 @@ async function doJoin() {
   const roomId = ($('joinRoom') as HTMLInputElement).value.trim().toUpperCase()
   const pass = ($('joinPass') as HTMLInputElement).value
   if (!/^[0-9A-Z]{16}$/.test(roomId)) return toast('部屋のIDが正しくありません')
+  // ⚠ 本人が合言葉で入り直す＝明示の操作。「この端末から消す」の印を解く。
+  // 解かないと、消した部屋に入り直した時に**書き込みが黙って全部捨てられる**
+  revive(roomId)
+  goneRooms.delete(roomId)
   $('joinBtn').setAttribute('disabled', '')
   toast('合言葉から鍵を作っています…')
   try {
@@ -296,6 +303,7 @@ async function doJoin() {
 async function openRemembered(roomId: string) {
   const s = remembered(roomId)
   if (!s) return toast('この端末には保存されていません')
+  revive(roomId) // 一覧から開いた＝明示の操作（別タブで入り直した部屋を、このタブで開く場合）
 
   // 🔴 圏外入室（§9.1）で入った部屋は**トークンを持たない**（authKey を端末に
   // 保存しない設計）。電波が戻ったら一度だけ合言葉を聞いて、正式に入室する。
@@ -347,7 +355,14 @@ async function openRemembered(roomId: string) {
  * 入り直しを促すが、電波が戻った時はその場で「未同期」に戻すだけでよい）。
  */
 async function resync(s: Session): Promise<void> {
-  const result = await pull(s)
+  if (goneRooms.has(s.roomId)) return onRoomGone(s)
+  let result: Awaited<ReturnType<typeof pull>>
+  try {
+    result = await pull(s)
+  } catch (e) {
+    if (e instanceof RoomGoneError) return onRoomGone(s)
+    throw e
+  }
   if (result === 'conflict') return showConflict(s)
   if (result === 'merged') toast('相手の記録と合わせました')
   state = localState(s.roomId)
@@ -595,7 +610,9 @@ function startLive() {
   // 正式に入り直すと token が入り、その時の renderRoom で繋がる。
   if (!session.token) return
   const s = session
+  if (goneRooms.has(s.roomId)) return
   connectLive(s, {
+    onGone: () => onRoomGone(s),
     onStatus: (connected) => {
       $('live').textContent = connected ? '他の端末とつながっています' : ''
     },
@@ -802,8 +819,32 @@ function renderSummary() {
 function persist() {
   if (!session || !state) return
   commitLocal(session.roomId, state)
+  // 消えた部屋へは送らない（送っても 404 が返るだけ）。端末の控えには残す
+  if (goneRooms.has(session.roomId)) return renderSync('gone')
   renderSync('pending')
   void push(session, clientId).then(afterPush(session))
+}
+
+/**
+ * 🔴 **部屋がサーバーから消えていた。控えは消さない。知らせて、同期を止める。**
+ *
+ * 以前は 404 を「繋がらない」と同じに扱っていた。削除済みの部屋を開いた端末は「未同期」のまま
+ * 最大30秒おきに繋ぎ直しを続け、**以後足した記録はどこにも届かず、削除されたことも一度も
+ * 知らされなかった**＝他の参加者には「この端末から消す」を押すきっかけが来なかった
+ * （2026-09-10 の PP×実装の監査で指摘）。
+ * ⚠ 控えは**自動で消さない**。本人の同意なく消すのは、中身を最後に見る機会を奪う。
+ *   消すかどうかは本人が「この端末から消す」で決める（PP の説明どおり）。
+ */
+const goneRooms = new Set<string>()
+function onRoomGone(s: import('./api.ts').Session) {
+  goneRooms.add(s.roomId)
+  if (session?.roomId !== s.roomId) return
+  disconnectLive()
+  // ⚠ 接続を先に手放すので「切れた」の通知（onStatus(false)）は来ない。自分で消さないと
+  // 「他の端末とつながっています」が削除の表示と並んで残る（2026-09-11 に実ブラウザで見つけた）
+  $('live').textContent = ''
+  renderSync('gone')
+  toast('この旅行はサーバーから削除されています')
 }
 
 /**
@@ -817,6 +858,7 @@ function persist() {
 function afterPush(s: import('./api.ts').Session) {
   return (status: SyncStatus) => {
     if (status === 'conflict') return void showConflict(s)
+    if (status === 'gone') return onRoomGone(s)
     renderSync(status)
   }
 }
@@ -828,6 +870,7 @@ function renderSync(status: SyncStatus) {
     pending: '未同期（この端末には保存されています）',
     offline: 'オフライン（この端末には保存されています）',
     conflict: '他の端末の変更と食い違っています',
+    gone: 'この旅行はサーバーから削除されています。この端末の控えだけが残っています（入口の「この端末から消す」で消せます）',
   }
   el.textContent = label[status]
   el.className = `sync ${status}`
@@ -958,6 +1001,42 @@ async function destroyRoom() {
   }
 }
 
+/**
+ * 🔴 **「この端末から消す」は、先に止めてから消す。**
+ *
+ * 以前は控えと鍵を消すだけで、その部屋の WebSocket も、画面の記憶（鍵とトークンを含む
+ * session）も残していた。通信中の取り込みが返ると控えを書き戻し、入口の一覧に載らない
+ * **孤児**ができた（2026-09-10 の監査で指摘）。
+ */
+function forgetOnThisDevice(roomId: string) {
+  if (session?.roomId === roomId) {
+    disconnectLive()
+    session = null
+    state = null
+  }
+  markForgotten(roomId) // 遅れて届く応答が書き戻さないように、消す前に印を付ける
+  dropLocal(roomId)
+  forget(roomId)
+}
+
+/**
+ * 🔴 **別のタブで消された時も、このタブが追従する。**
+ *
+ * 同じブラウザの別タブでその部屋を開いたままだと、相手の更新が届いた時や記録を足した時に
+ * 控えが書き直され、**サイトデータの削除でしか消せない孤児**が残っていた（2026-09-10 の監査）。
+ * ⚠ `storage` は**変更した以外のタブ**で発火する＝まさにこの場合だけ拾える。
+ * ⚠ key が null ＝別タブでサイトデータがまるごと消された。これも止める。
+ */
+addEventListener('storage', (e) => {
+  if (!session) return
+  if (e.key !== null && e.key !== 'michizure.rooms.v1') return
+  const id = session.roomId
+  if (rememberedAll().some((r) => r.roomId === id)) return
+  forgetOnThisDevice(id)
+  renderHome()
+  toast('別のタブで、この旅行をこの端末から消しました')
+})
+
 // ---------- 配線 ----------
 
 document.addEventListener('click', (e) => {
@@ -989,8 +1068,7 @@ document.addEventListener('click', (e) => {
   }
   if (el.dataset.open) void openRemembered(el.dataset.open)
   if (el.dataset.forget) {
-    dropLocal(el.dataset.forget)
-    forget(el.dataset.forget)
+    forgetOnThisDevice(el.dataset.forget)
     renderHome()
     toast('この端末から消しました')
   }
@@ -1089,6 +1167,7 @@ document.addEventListener('change', (e) => {
 async function offlineJoin(roomId: string, passphrase: string): Promise<boolean> {
   const e = entryFromHash(location.hash)
   if (!e) return false
+  revive(roomId) // 本人が券で入り直す＝明示の操作
   try {
     // ⚠ 静的 import であること。ここを遅延にすると **圏外で読み込めない**
     // （2026-09-06、実際にそれで入室に失敗した）

@@ -14,6 +14,8 @@ import { wsOrigin } from './origins.ts'
 export const clientId = crypto.randomUUID()
 
 type Handlers = {
+  /** 🔴 部屋がサーバーから消えた。**繋ぎ直しは止める**（404 に向けて叩き続けない） */
+  onGone?: () => void
   /** ⚠ 版も渡す。これが無いと、受け取った側は次の書き込みで必ず断られる */
   onUpdate: (blob: { ciphertext: string; iv: string }, rev: number) => void
   onStatus: (connected: boolean) => void
@@ -94,7 +96,7 @@ function open(s: Session, h: Handlers): void {
   })
 
   ws.addEventListener('message', (e) => {
-    let msg: { type?: string; blob?: { ciphertext: string; iv: string }; rev?: number }
+    let msg: { type?: string; code?: string; blob?: { ciphertext: string; iv: string }; rev?: number }
     try {
       msg = JSON.parse(String(e.data))
     } catch {
@@ -104,6 +106,12 @@ function open(s: Session, h: Handlers): void {
     // どちらも取り込み方は同じ（判断は呼び出し側の衝突検出に任せる）
     if ((msg.type === 'init' || msg.type === 'update') && msg.blob && typeof msg.rev === 'number') {
       h.onUpdate(msg.blob, msg.rev)
+    }
+    // ⚠ 以前は error 型を捨てていた。サーバーは削除の瞬間に room_deleted を送っているのに、
+    // 端末は 404 に向けて最大30秒おきに繋ぎ直しを続けていた（2026-09-10 の監査で指摘）
+    if (msg.type === 'error' && msg.code === 'room_deleted') {
+      disconnectLive()
+      h.onGone?.()
     }
   })
 

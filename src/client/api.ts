@@ -107,6 +107,22 @@ export async function enterRoom(
   return { session: { roomId, token, encKeyBits }, entry: meta }
 }
 
+/**
+ * 🔴 **部屋がサーバーから消えている。通信の失敗とは別物。**
+ *
+ * 以前は 404 も「繋がらない」と同じに扱っていたので、削除済みの部屋を開いた端末は
+ * 「未同期」のまま繋ぎ直しを続け、**以後足した記録はどこにも届かなかった**。しかも本人は
+ * 削除されたことを一度も知らされず、「この端末から消す」を押すきっかけが来なかった
+ * （2026-09-10 の PP×実装の監査で指摘。PP の「削除済みは見つかりませんと出る」とも食い違っていた）。
+ * ⚠ 正しいトークンで叩いた /blob が 404 なら、それは部屋が無いということ（トークンが違えば 401）。
+ */
+export class RoomGoneError extends Error {
+  constructor() {
+    super('room_gone')
+    this.name = 'RoomGoneError'
+  }
+}
+
 /** サーバーから取ってきた中身と、その版 */
 export type Loaded = { state: RoomState; rev: number }
 
@@ -122,9 +138,11 @@ export class StaleError extends Error {
 }
 
 export async function loadState(s: Session): Promise<Loaded> {
-  const blob = await json<{ ciphertext: string; iv: string; rev: number }>(
-    await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, { headers: { Authorization: `Bearer ${s.token}` } }),
-  )
+  const res = await fetch(`${getApiBase()}/api/rooms/${s.roomId}/blob`, {
+    headers: { Authorization: `Bearer ${s.token}` },
+  })
+  if (res.status === 404) throw new RoomGoneError()
+  const blob = await json<{ ciphertext: string; iv: string; rev: number }>(res)
   return { state: await open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv), rev: blob.rev }
 }
 
@@ -155,6 +173,7 @@ export async function saveState(
     const body = (await res.json()) as { rev?: number }
     throw new StaleError(body.rev ?? 0)
   }
+  if (res.status === 404) throw new RoomGoneError()
   return (await json<{ rev: number }>(res)).rev
 }
 

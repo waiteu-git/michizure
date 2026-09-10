@@ -27,11 +27,14 @@ const mem = new Map<string, string>()
 const server = { ciphertext: '', iv: '', rev: 0 }
 let puts = 0
 let rejected = 0
+/** 部屋が消えた状態（GET も PUT も 404） */
+let deleted = false
 /** PUT の応答を返す直前に一度だけ走らせる細工（送信中に起きる出来事を作る） */
 let duringPut: (() => Promise<void> | void) | null = null
 
 const realFetch = globalThis.fetch
 ;(globalThis as any).fetch = async (_url: string, init?: RequestInit) => {
+  if (deleted) return Response.json({ error: 'not_found' }, { status: 404 })
   if ((init?.method ?? 'GET') === 'GET') {
     return Response.json({ ciphertext: server.ciphertext, iv: server.iv, rev: server.rev })
   }
@@ -58,6 +61,7 @@ const realFetch = globalThis.fetch
 const { pull, push, commitLocal, localState, isDirty, applyRemote } =
   await import('../src/client/store')
 const { seal, open } = await import('../src/box')
+const { RoomGoneError } = await import('../src/client/api')
 const { deriveKeys } = await import('../src/keys')
 import type { RoomState, Session, Booking } from '../src/client/api'
 
@@ -105,6 +109,7 @@ beforeEach(async () => {
   puts = 0
   rejected = 0
   duringPut = null
+  deleted = false
   await serverHolds(empty)
 })
 
@@ -212,5 +217,33 @@ describe('送信中に相手の版が届いた時', () => {
     commitLocal(ROOM, withB([bk('X', '宿'), bk('M', '自分の記録')]))
     await push(s)
     expect((await serverState()).bookings.map((b) => b.id).sort()).toEqual(['M', 'X'])
+  })
+})
+
+
+/**
+ * 🔴 **部屋が消えていたことを、通信の失敗と区別する。**
+ * 以前は 404 を「繋がらない」と同じに扱い、削除済みの部屋を開いた端末は「未同期」のまま
+ * 送り続けていた＝以後足した記録はどこにも届かず、削除も知らされなかった（2026-09-10 の監査）。
+ */
+describe('部屋がサーバーから消えていた時', () => {
+  it('送信は gone を返す（pending や offline にしない）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    deleted = true
+    expect(await push(s)).toBe('gone')
+  })
+
+  it('取り込みは RoomGoneError を投げる', async () => {
+    deleted = true
+    await expect(pull(s)).rejects.toBeInstanceOf(RoomGoneError)
+  })
+
+  it('消えていても、端末の控えは消さない（本人が決めるまで残す）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    deleted = true
+    await push(s)
+    expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['居酒屋'])
   })
 })

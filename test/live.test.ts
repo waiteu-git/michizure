@@ -42,6 +42,15 @@ class FakeWS {
     this.readyState = 1
     this.fire('open')
   }
+  /** サーバー側から接続を閉じる（本物のサーバーは room_deleted を送った後に閉じる） */
+  serverClose() {
+    this.readyState = 3
+    this.fire('close')
+  }
+  /** サーバーからの通知を1通届ける */
+  receive(obj: unknown) {
+    for (const f of [...(this.ls.get('message') ?? [])]) (f as (e: unknown) => void)({ data: JSON.stringify(obj) })
+  }
 }
 
 const timers = new Map<number, { fn: () => void; delay: number }>()
@@ -207,5 +216,46 @@ describe('画面に戻った時', () => {
     const before = FakeWS.made.length
     fire(onDocument, 'visibilitychange')
     expect(FakeWS.made).toHaveLength(before)
+  })
+})
+
+
+/**
+ * 🔴 **サーバーが「部屋が消えた」と知らせたら、止まる。**
+ * 以前は error 型を捨てていて、削除済みの部屋に向けて最大30秒おきに繋ぎ直しを続けていた
+ * （2026-09-10 の監査で指摘）。
+ */
+describe('部屋が削除された時', () => {
+  it('onGone を呼び、繋ぎ直しを予約しない', () => {
+    let gone = 0
+    connectLive(S, { ...noop, onGone: () => gone++ })
+    last().succeed()
+    // ⚠ 本物のサーバーと同じ順序＝通知を送ってから閉じる。閉じないと、修正が無くても
+    // 「繋がったまま」で繋ぎ直しが起きず、テストが**間違った理由で通る**（実際に一度そうなった）
+    last().receive({ type: 'error', code: 'room_deleted' })
+    last().serverClose()
+    expect(gone).toBe(1)
+    expect(timers.size).toBe(0)
+  })
+
+  it('その後に電波が戻っても、画面に戻っても繋ぎ直さない', () => {
+    connectLive(S, { ...noop, onGone: () => {} })
+    last().succeed()
+    // ⚠ 本物のサーバーと同じ順序＝通知を送ってから閉じる。閉じないと、修正が無くても
+    // 「繋がったまま」で繋ぎ直しが起きず、テストが**間違った理由で通る**（実際に一度そうなった）
+    last().receive({ type: 'error', code: 'room_deleted' })
+    last().serverClose()
+    const before = FakeWS.made.length
+    fire(onGlobal, 'online')
+    fire(onDocument, 'visibilitychange')
+    expect(FakeWS.made).toHaveLength(before)
+  })
+
+  it('別の種類の error では止まらない（負の対照）', () => {
+    let gone = 0
+    connectLive(S, { ...noop, onGone: () => gone++ })
+    last().succeed()
+    last().receive({ type: 'error', code: 'stale', rev: 3 })
+    expect(gone).toBe(0)
   })
 })
