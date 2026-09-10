@@ -109,7 +109,6 @@ export interface Blob {
 /** サーバーが保持する平文のメタデータ */
 export interface RoomMeta {
   roomId: string
-  createdAt: number
   lastAccessAt: number
   schemaVersion: number
 }

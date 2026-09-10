@@ -102,7 +102,6 @@ export class Room extends DurableObject {
     }
     this.put('meta', {
       roomId: body.roomId,
-      createdAt: body.now,
       lastAccessAt: body.now,
       schemaVersion: 1,
     } satisfies RoomMeta)
@@ -191,7 +190,9 @@ export class Room extends DurableObject {
     }
 
     const meta = this.get<RoomMeta>('meta')!
-    this.put('meta', { ...meta, lastAccessAt: body.now })
+    // ⚠ 展開（...meta）で書き直さない。展開すると、裁定で消した欄（createdAt）が
+    // 古い部屋に残り続ける＝データ最小化にならない。持つ欄をここで明示する
+    this.put('meta', { roomId: meta.roomId, lastAccessAt: body.now, schemaVersion: meta.schemaVersion })
     await this.ctx.storage.setAlarm(body.now + ROOM_TTL_MS)
     return Response.json({ ok: true })
   }
@@ -263,8 +264,12 @@ export class Room extends DurableObject {
     this.ctx.acceptWebSocket(server)
     // 誰の接続かを覚えておく。書いた本人へ中継し返さないために要る。
     // ⚠ Hibernation で DO が退避しても残るよう、変数ではなく接続に括り付ける
-    const clientId = new URL(request.url).searchParams.get('client') ?? ''
-    server.serializeAttachment({ clientId })
+    const q = new URL(request.url).searchParams
+    const clientId = q.get('client') ?? ''
+    // 🔴 期限を接続に括り付ける。以前は接続する時に1回見るだけで、**30日を過ぎても繋がったまま
+    // 他の端末の更新を受け取れ（読める）、送った update も通った（書ける）**（2026-09-10 の監査）
+    const exp = Number(q.get('exp') ?? 0)
+    server.serializeAttachment({ clientId, exp })
     server.send(JSON.stringify({ type: 'init', blob, rev: this.rev() }))
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -276,10 +281,27 @@ export class Room extends DurableObject {
    * 他端末の更新を握り潰していた不具合があった。除外の判定はここ1箇所に集約し、
    * クライアント側に重複防止フラグを置いてはならない。
    */
+  /**
+   * 接続の期限が切れているか。**切れていたら知らせて閉じる**（切れたまま読ませも書かせもしない）。
+   * ⚠ 期限の無い接続（この変更の前に張られた物）も切れているとみなす＝繋ぎ直させて検証し直す
+   */
+  private expired(ws: WebSocket): boolean {
+    const att = ws.deserializeAttachment() as { exp?: number } | null
+    if (att?.exp && Date.now() <= att.exp) return false
+    try {
+      ws.send(JSON.stringify({ type: 'error', code: 'token_expired' }))
+      ws.close(1008, 'token expired')
+    } catch {
+      // 既に閉じていれば何もしない
+    }
+    return true
+  }
+
   private broadcast(blob: Blob, rev: number, exclude: WebSocket | string | null): void {
     const payload = JSON.stringify({ type: 'update', blob, rev })
     for (const peer of this.ctx.getWebSockets()) {
       if (peer === exclude) continue
+      if (this.expired(peer)) continue // 期限の切れた接続には中継しない（読ませない）
       if (typeof exclude === 'string' && exclude !== '') {
         const att = peer.deserializeAttachment() as { clientId?: string } | null
         if (att?.clientId === exclude) continue
@@ -289,6 +311,7 @@ export class Room extends DurableObject {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (this.expired(ws)) return // 期限の切れた接続からの書き込みは受けない
     if (typeof message !== 'string') return
     if (message.length > MAX_REQUEST_BYTES) {
       ws.send(JSON.stringify({ type: 'error', code: 'blob_too_large' }))
@@ -405,7 +428,7 @@ export class Room extends DurableObject {
   async setLastAccessForTest(at: number): Promise<void> {
     const meta = this.get<RoomMeta>('meta')
     if (meta === null) return
-    this.put('meta', { ...meta, lastAccessAt: at })
+    this.put('meta', { roomId: meta.roomId, lastAccessAt: at, schemaVersion: meta.schemaVersion })
   }
 }
 

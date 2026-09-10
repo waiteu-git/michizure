@@ -19,9 +19,11 @@ export const SERVER_STORED = {
   /** SQLite の `room` 表（key → JSON の値）に入るもの */
   room: {
     meta: {
-      fields: ['createdAt', 'lastAccessAt', 'roomId', 'schemaVersion'],
-      説明: '部屋のID・作成日時・最後に入室した日時・保存形式の版。自動削除の判定に使う',
-      PP: '§2「部屋のID」「作成日時・最後に入室した日時」',
+      fields: ['lastAccessAt', 'roomId', 'schemaVersion'],
+      説明:
+        '部屋のID・最後に入室した日時・保存形式の版。自動削除の判定に使う。' +
+        '⚠ 作成日時（createdAt）は**持たない**＝2026-09-11 のユーザー裁定で消した（書くだけで一度も読まれていなかった）',
+      PP: '§2「部屋のID」「最後に入室した日時」（⚠ PP §2 の「作成日時」も合わせて消すこと＝BH 所管）',
     },
     auth: {
       fields: ['authKeyHash', 'iterations', 'kdfVersion', 'salt'],

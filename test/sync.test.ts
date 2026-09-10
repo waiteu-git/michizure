@@ -381,3 +381,68 @@ describe('版の照合', () => {
     a.close()
   })
 })
+
+/**
+ * 🔴 **接続の後も期限を見る。**
+ *
+ * 以前は WebSocket を張る時に1回トークンを確かめるだけで、**30日を過ぎても繋がったまま他の端末の
+ * 更新を受け取れ（読める）、送った update も通った（書ける）**（2026-09-10 の PP×実装の監査）。
+ * ⚠ 30日待つ代わりに、接続に括り付けた期限を過去へ書き換えて確かめる。
+ */
+describe('接続の期限', () => {
+  const expireAll = async (roomId: string) => {
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
+    await runInDurableObject(stub, (_i: Room, state: DurableObjectState) => {
+      for (const ws of state.getWebSockets()) {
+        ws.serializeAttachment({ ...((ws.deserializeAttachment() as object) ?? {}), exp: 1 })
+      }
+    })
+  }
+  const stored = async (roomId: string, token: string) =>
+    ((await (await SELF.fetch(`https://example.com/api/rooms/${roomId}/blob`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })).json()) as { ciphertext: string }).ciphertext
+
+  it('期限の切れた接続からの書き込みは受けず、期限切れを知らせる', async () => {
+    const room = await createRoom()
+    const a = await connect(room.roomId, room.token, 'a')
+    const init = await a.next()
+    await expireAll(room.roomId)
+    const before = await stored(room.roomId, room.token)
+    a.ws.send(JSON.stringify({
+      type: 'update',
+      blob: { ...(await seal(room.encKeyBits, { name: '期限切れの書き込み' })), blobVersion: 1 },
+      baseRev: init.rev,
+    }))
+    expect(await a.next()).toMatchObject({ type: 'error', code: 'token_expired' })
+    expect(await stored(room.roomId, room.token)).toBe(before) // 書かれていない
+  })
+
+  it('期限の切れた接続には、他の端末の更新を中継しない（読ませない）', async () => {
+    const room = await createRoom()
+    const reader = await connect(room.roomId, room.token, 'reader')
+    const init = await reader.next()
+    await expireAll(room.roomId)
+    await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${room.token}`, 'Content-Type': 'application/json', 'X-Client-Id': 'writer' },
+      body: JSON.stringify({ ...(await seal(room.encKeyBits, { name: '新しい中身' })), blobVersion: 1, baseRev: init.rev }),
+    })
+    const got = await reader.next()
+    expect(got.type).toBe('error')
+    expect(got.code).toBe('token_expired')
+    expect(reader.received.some((m) => m.type === 'update')).toBe(false)
+  })
+
+  it('期限内の接続は、これまでどおり中継を受け取る（負の対照）', async () => {
+    const room = await createRoom()
+    const reader = await connect(room.roomId, room.token, 'reader')
+    const init = await reader.next()
+    await SELF.fetch(`https://example.com/api/rooms/${room.roomId}/blob`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${room.token}`, 'Content-Type': 'application/json', 'X-Client-Id': 'writer' },
+      body: JSON.stringify({ ...(await seal(room.encKeyBits, { name: '新しい中身' })), blobVersion: 1, baseRev: init.rev }),
+    })
+    expect((await reader.next()).type).toBe('update')
+  })
+})

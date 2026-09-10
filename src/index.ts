@@ -192,7 +192,10 @@ async function handleWebSocket(request: Request, env: Env, roomId: string): Prom
   // ⚠ DO へは URL を組み直して渡すので、**クエリは明示的に運ぶ**。
   // 落とすと接続に client が付かず、書いた本人にも中継し返してしまう
   const client = encodeURIComponent(url.searchParams.get('client') ?? '')
-  return roomStub(env, roomId).fetch(`https://do/ws?client=${client}`, {
+  // 🔴 トークンの期限も運ぶ。DO が接続の後も期限を見るため（検証済みなので信じてよい。
+  // DO はこの Worker からしか呼ばれない）
+  const exp = Number(token.split('.')[1])
+  return roomStub(env, roomId).fetch(`https://do/ws?client=${client}&exp=${exp}`, {
     headers: request.headers,
   })
 }

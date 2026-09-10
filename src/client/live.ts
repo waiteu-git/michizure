@@ -113,6 +113,9 @@ function open(s: Session, h: Handlers): void {
       disconnectLive()
       h.onGone?.()
     }
+    // 期限の切れたトークンで繋ぎ直しても 401 が返り続けるだけ＝叩き続けない。
+    // ⚠ 画面は変えない（PP §7「トークンが切れた端末には入り直しを促さない」のとおり）
+    if (msg.type === 'error' && msg.code === 'token_expired') disconnectLive()
   })
 
   /**

@@ -202,3 +202,40 @@ describe('部屋が消えた後の書き込み', () => {
     expect(res.status).toBe(404)
   })
 })
+
+/**
+ * 🔴 **ユーザー裁定④（2026-09-11）＝使っていない createdAt を消す。古い部屋からも消えること。**
+ *
+ * createdAt は書くだけで一度も読まれていなかった。新しい部屋で書かないだけでは足りない＝
+ * meta を展開（...meta）で書き直すと、**古い部屋に残り続ける**。次に入室した時に落ちることを確かめる。
+ */
+describe('作成日時（createdAt）を持たない', () => {
+  it('古い形の meta も、次に入室した時に createdAt が消える', async () => {
+    const salt = generateSalt()
+    const { authKey, encKeyBits } = await deriveKeys('あいことば', salt, FAST)
+    const created = (await (
+      await SELF.fetch('https://example.com/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salt, authKey, blob: { ...(await seal(encKeyBits, { name: '作成' })), blobVersion: 1 }, iterations: FAST, kdfVersion: 1 }),
+      })
+    ).json()) as { roomId: string }
+    const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
+    // この変更の前に作られた部屋を再現する（meta に createdAt が入っている）
+    await runInDurableObject(stub, (i: Room) => {
+      const sql = (i as any).sql()
+      const meta = JSON.parse([...sql.exec("SELECT value FROM room WHERE key = 'meta'")][0].value as string)
+      sql.exec("UPDATE room SET value = ? WHERE key = 'meta'", JSON.stringify({ ...meta, createdAt: 1234567890 }))
+    })
+    await SELF.fetch(`https://example.com/api/rooms/${created.roomId}/enter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authKey }),
+    })
+    const dump = JSON.parse(await runInDurableObject(stub, (i: Room) => i.dumpForTest())) as {
+      room: { key: string; value: string }[]
+    }
+    const meta = JSON.parse(dump.room.find((r) => r.key === 'meta')!.value)
+    expect(Object.keys(meta).sort()).toEqual(['lastAccessAt', 'roomId', 'schemaVersion'])
+  })
+})
