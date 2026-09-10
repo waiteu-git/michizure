@@ -259,3 +259,31 @@ describe('部屋が削除された時', () => {
     expect(gone).toBe(0)
   })
 })
+
+/**
+ * 🔴 **トークンの期限が切れたら、止まるだけでなく画面側へ知らせる。**
+ * 以前は繋ぎ直しを止めるだけで何も知らせなかった＝合言葉を聞き直す経路が無く、
+ * 端末は「未同期」のまま黙って止まっていた（2026-09-11 に発見）。
+ */
+describe('トークンの期限が切れた時', () => {
+  it('onExpired を呼び、繋ぎ直しを予約しない', () => {
+    let expired = 0
+    connectLive(S, { ...noop, onExpired: () => expired++ })
+    last().succeed()
+    // 本物のサーバーと同じ順序＝通知を送ってから閉じる（1008）
+    last().receive({ type: 'error', code: 'token_expired' })
+    last().serverClose()
+    expect(expired).toBe(1)
+    expect(timers.size).toBe(0)
+  })
+
+  it('部屋の削除とは取り違えない（負の対照）', () => {
+    let gone = 0
+    let expired = 0
+    connectLive(S, { ...noop, onGone: () => gone++, onExpired: () => expired++ })
+    last().succeed()
+    last().receive({ type: 'error', code: 'token_expired' })
+    last().serverClose()
+    expect([gone, expired]).toEqual([0, 1])
+  })
+})

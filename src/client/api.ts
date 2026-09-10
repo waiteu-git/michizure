@@ -123,6 +123,33 @@ export class RoomGoneError extends Error {
   }
 }
 
+/**
+ * 🔴 **接続用のトークンが断られた。通信の失敗とは別物。**
+ *
+ * 主な原因は30日の期限切れ（`TOKEN_TTL_MS`）。署名の鍵を入れ替えた時も同じ形になる。
+ * どちらも**送り直しても直らない**。直すには合言葉で入り直すしかない（`authKey` は端末に
+ * 保存しない設計＝設計 §9 の「30日で再認証」）。
+ * 以前は 401 も「繋がらない」と同じに扱っていたので、30日経った端末は「未同期」のまま
+ * 黙って止まり、以後足した記録はどこにも届かなかった（2026-09-11 に発見）。
+ */
+export class TokenRejectedError extends Error {
+  constructor() {
+    super('token_rejected')
+    this.name = 'TokenRejectedError'
+  }
+}
+
+/**
+ * ⚠ **当サービスが断ったと分かる 401 だけ**をトークンの失効と見なす（本文の error まで見る）。
+ * 途中の何か（ログイン画面を挟む網など）が返した 401 まで失効扱いすると、
+ * 直せない理由で入り直しを求めることになる。
+ */
+async function tokenRejected(res: Response): Promise<boolean> {
+  if (res.status !== 401) return false
+  const body = (await res.clone().json().catch(() => null)) as { error?: string } | null
+  return body?.error === 'unauthorized'
+}
+
 /** サーバーから取ってきた中身と、その版 */
 export type Loaded = { state: RoomState; rev: number }
 
@@ -142,6 +169,7 @@ export async function loadState(s: Session): Promise<Loaded> {
     headers: { Authorization: `Bearer ${s.token}` },
   })
   if (res.status === 404) throw new RoomGoneError()
+  if (await tokenRejected(res)) throw new TokenRejectedError()
   const blob = await json<{ ciphertext: string; iv: string; rev: number }>(res)
   return { state: await open<RoomState>(s.encKeyBits, blob.ciphertext, blob.iv), rev: blob.rev }
 }
@@ -174,6 +202,7 @@ export async function saveState(
     throw new StaleError(body.rev ?? 0)
   }
   if (res.status === 404) throw new RoomGoneError()
+  if (await tokenRejected(res)) throw new TokenRejectedError()
   return (await json<{ rev: number }>(res)).rev
 }
 

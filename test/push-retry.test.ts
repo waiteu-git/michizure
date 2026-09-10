@@ -29,13 +29,31 @@ let puts = 0
 let rejected = 0
 /** 部屋が消えた状態（GET も PUT も 404） */
 let deleted = false
+/**
+ * トークンが断られた状態（GET も PUT も 401）。'ours' は当サービスの応答、
+ * 'foreign' は当サービス以外が返した 401（負の対照）
+ */
+let tokenRejected: 'ours' | 'foreign' | null = null
+let calls = 0
+/** 次の GET に一度だけ、この古い版を返させる（送信の前に頼んだ応答が、送信の後に届いた形を作る） */
+let staleGet: { ciphertext: string; iv: string; rev: number } | null = null
 /** PUT の応答を返す直前に一度だけ走らせる細工（送信中に起きる出来事を作る） */
 let duringPut: (() => Promise<void> | void) | null = null
 
 const realFetch = globalThis.fetch
 ;(globalThis as any).fetch = async (_url: string, init?: RequestInit) => {
+  calls++
   if (deleted) return Response.json({ error: 'not_found' }, { status: 404 })
+  if (tokenRejected === 'ours') return Response.json({ error: 'unauthorized' }, { status: 401 })
+  if (tokenRejected === 'foreign') {
+    return new Response('<html>sign in</html>', { status: 401, headers: { 'Content-Type': 'text/html' } })
+  }
   if ((init?.method ?? 'GET') === 'GET') {
+    if (staleGet) {
+      const old = staleGet
+      staleGet = null
+      return Response.json(old)
+    }
     return Response.json({ ciphertext: server.ciphertext, iv: server.iv, rev: server.rev })
   }
   puts++
@@ -61,7 +79,7 @@ const realFetch = globalThis.fetch
 const { pull, push, commitLocal, localState, isDirty, applyRemote } =
   await import('../src/client/store')
 const { seal, open } = await import('../src/box')
-const { RoomGoneError } = await import('../src/client/api')
+const { RoomGoneError, TokenRejectedError } = await import('../src/client/api')
 const { deriveKeys } = await import('../src/keys')
 import type { RoomState, Session, Booking } from '../src/client/api'
 
@@ -110,6 +128,9 @@ beforeEach(async () => {
   rejected = 0
   duringPut = null
   deleted = false
+  tokenRejected = null
+  calls = 0
+  staleGet = null
   await serverHolds(empty)
 })
 
@@ -245,5 +266,114 @@ describe('部屋がサーバーから消えていた時', () => {
     deleted = true
     await push(s)
     expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['居酒屋'])
+  })
+})
+
+/**
+ * 🔴 **トークンが断られたら、通信の失敗と区別して知らせる。送り直しを続けない。**
+ *
+ * 以前は 401 を「繋がらない」と同じに扱っていた。だから最後に合言葉で入ってから30日経った端末は
+ * 「未同期」のまま黙って止まり、合言葉を聞き直す経路も無かった＝以後足した記録はどこにも届かず、
+ * 本人は理由を知らされない（2026-09-11 に発見。設計は「30日で再認証」を意図している）。
+ */
+describe('接続用のトークンが断られた時（30日の期限切れなど）', () => {
+  it('送信は expired を返す（pending にしない）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    tokenRejected = 'ours'
+    expect(await push(s)).toBe('expired')
+  })
+
+  it('断られた送信は1回きりで、送り直さない', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    tokenRejected = 'ours'
+    calls = 0
+    await push(s)
+    expect(calls).toBe(1)
+  })
+
+  it('取り込みは TokenRejectedError を投げる', async () => {
+    tokenRejected = 'ours'
+    await expect(pull(s)).rejects.toBeInstanceOf(TokenRejectedError)
+  })
+
+  it('断られても、未送信の記録は端末に残し未送信のまま（入り直した後の合流で送る）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    tokenRejected = 'ours'
+    await push(s)
+    expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['居酒屋'])
+    expect(isDirty(ROOM)).toBe(true)
+  })
+
+  it('当サービス以外が返した 401 は、トークンの失効と見なさない（負の対照）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    tokenRejected = 'foreign'
+    expect(await push(s)).toBe('pending')
+  })
+})
+
+/**
+ * 🔴 **送り終えた後に、送る前の古い版が届いても巻き戻さない。**
+ *
+ * 2026-09-11、実ブラウザで踏んだ。入り直した直後は「WebSocket を繋ぐ」と「未送信を送る」が
+ * 同時に走る。WebSocket が繋いだ瞬間に送ってくる版（送信前＝古い）の復号が、送信の完了より
+ * 後になると、「未送信なし」の端末はそれを黙って採用していた＝**送ったばかりの記録が画面から
+ * 消え、しかも「保存済み」と出る**（サーバーには届いている。次の同期で戻るので失われはしない）。
+ * 圏外入室 → 正式入室（設計 §9.1）も同じ形。版の番号は減らないので、手元より古い版は捨ててよい。
+ */
+describe('送り終えた後に、送る前の古い版が届いた時', () => {
+  it('WebSocket で届いた古い版で、送り終えた中身を巻き戻さない', async () => {
+    expect(await pull(s)).toBe('adopted')
+    const old = { ciphertext: server.ciphertext, iv: server.iv, rev: server.rev }
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    expect(await push(s)).toBe('synced')
+    applyRemote(ROOM, await open<RoomState>(encKeyBits, old.ciphertext, old.iv), old.rev)
+    expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['居酒屋'])
+    expect(isDirty(ROOM)).toBe(false)
+  })
+
+  it('取り込み（GET）の応答が古い版でも、巻き戻さない', async () => {
+    expect(await pull(s)).toBe('adopted')
+    const old = { ciphertext: server.ciphertext, iv: server.iv, rev: server.rev }
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    expect(await push(s)).toBe('synced')
+    staleGet = old
+    await pull(s)
+    expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['居酒屋'])
+  })
+
+  /**
+   * 🔴 **版が本当に戻った時（運営者が時点復元＝PITR をした時）に、同期が永久に止まらないこと。**
+   * 「手元より古い版は捨てる」を素直に書くと、戻ったサーバーの版を全て捨て、送れば 409・
+   * 取り込めば捨てる、を繰り返して二度と送れなくなる（2026-09-11 の自己レビューで発見）。
+   * ⇒ 古い応答は一度だけ取り直す。取り直しても古いなら、それが今のサーバー。
+   */
+  it('サーバーの版が本当に戻った時は、取り込んで送れる（時点復元）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    const restored = { ciphertext: server.ciphertext, iv: server.iv, rev: server.rev }
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋')] })
+    expect(await push(s)).toBe('synced')
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋'), bk('2', '宿')] })
+    expect(await push(s)).toBe('synced')
+    // 運営者が2回前の時点へ戻した
+    server.ciphertext = restored.ciphertext
+    server.iv = restored.iv
+    server.rev = restored.rev
+    commitLocal(ROOM, { ...empty, bookings: [bk('1', '居酒屋'), bk('2', '宿'), bk('3', '朝食')] })
+    // ⚠ 見るのは「止まらない」と「未送信の記録が届く」まで。戻された分（居酒屋・宿）をどう扱うか
+    //   （戻しを受け入れて消えたとみなすか、端末から戻し直すか）は、ここでは決めていない
+    //   ＝今の3方向マージは「相手が消した」と読む。時点復元の運用を決める時に決めること
+    expect(await push(s)).toBe('synced')
+    expect((await serverState()).bookings.map((b) => b.description)).toContain('朝食')
+  })
+
+  it('新しい版は今までどおり取り込む（負の対照）', async () => {
+    expect(await pull(s)).toBe('adopted')
+    await serverHolds({ ...empty, bookings: [bk('2', '相手の記録')] })
+    applyRemote(ROOM, await serverState(), server.rev)
+    expect(localState(ROOM)?.bookings.map((b) => b.description)).toEqual(['相手の記録'])
   })
 })

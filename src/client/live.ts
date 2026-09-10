@@ -16,6 +16,8 @@ export const clientId = crypto.randomUUID()
 type Handlers = {
   /** 🔴 部屋がサーバーから消えた。**繋ぎ直しは止める**（404 に向けて叩き続けない） */
   onGone?: () => void
+  /** 🔴 トークンの期限が切れた。**繋ぎ直しは止める**。合言葉で入り直すまで直らない */
+  onExpired?: () => void
   /** ⚠ 版も渡す。これが無いと、受け取った側は次の書き込みで必ず断られる */
   onUpdate: (blob: { ciphertext: string; iv: string }, rev: number) => void
   onStatus: (connected: boolean) => void
@@ -114,8 +116,12 @@ function open(s: Session, h: Handlers): void {
       h.onGone?.()
     }
     // 期限の切れたトークンで繋ぎ直しても 401 が返り続けるだけ＝叩き続けない。
-    // ⚠ 画面は変えない（PP §7「トークンが切れた端末には入り直しを促さない」のとおり）
-    if (msg.type === 'error' && msg.code === 'token_expired') disconnectLive()
+    // ⚠ 止めるだけでは足りない。以前はここで黙って止まり、画面は「つながっています」が
+    // 消えるだけだった＝合言葉を聞き直すきっかけが無かった（2026-09-11 に発見）
+    if (msg.type === 'error' && msg.code === 'token_expired') {
+      disconnectLive()
+      h.onExpired?.()
+    }
   })
 
   /**

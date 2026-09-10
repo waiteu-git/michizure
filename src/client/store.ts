@@ -1,4 +1,12 @@
-import { loadState, saveState, StaleError, RoomGoneError, type RoomState, type Session } from './api.ts'
+import {
+  loadState,
+  saveState,
+  StaleError,
+  RoomGoneError,
+  TokenRejectedError,
+  type RoomState,
+  type Session,
+} from './api.ts'
 import { merge3, type BookingConflict } from './merge.ts'
 import type { Booking } from './api.ts'
 
@@ -40,7 +48,7 @@ type Local = {
   dirty: boolean
 }
 
-export type SyncStatus = 'synced' | 'pending' | 'offline' | 'conflict' | 'gone'
+export type SyncStatus = 'synced' | 'pending' | 'offline' | 'conflict' | 'gone' | 'expired'
 
 function read(roomId: string): Local | null {
   try {
@@ -124,7 +132,10 @@ export function commitLocal(roomId: string, state: RoomState): void {
  * 戻り値が 'conflict' の場合、**端末の未送信の変更とサーバーの新しい版が衝突している**。
  * 設計の非スコープに従い、自動マージはしない（利用者に選ばせる）。
  */
-export async function pull(s: Session): Promise<'adopted' | 'merged' | 'conflict' | 'unchanged'> {
+export async function pull(
+  s: Session,
+  retried = false,
+): Promise<'adopted' | 'merged' | 'conflict' | 'unchanged'> {
   const { state: remote, rev } = await loadState(s)
   const local = read(s.roomId)
   const stamp = stampOf(remote)
@@ -133,6 +144,16 @@ export async function pull(s: Session): Promise<'adopted' | 'merged' | 'conflict
     write(s.roomId, { state: remote, baseStamp: stamp, base: remote, rev, dirty: false })
     return 'adopted'
   }
+  /**
+   * 🔴 **手元より古い応答は、一度だけ取り直す。捨てない。**
+   *
+   * 送る前に頼んだ応答が、送り終えた後に届くことがある（applyRemote と同じ形）。そのまま
+   * 取り込むと送ったばかりの記録が画面から消える。かといって捨てると、**版が本当に戻った時**
+   * （運営者の時点復元＝PP §7 の PITR）に、送れば 409・取り込めば捨てる、を繰り返して
+   * **同期が永久に止まる**（2026-09-11 の自己レビューで発見・テストで再現）。
+   * ⇒ 取り直して、それでも古ければ、それが今のサーバー。いつもの判定へ進む。
+   */
+  if (!retried && rev < (local.rev ?? 0)) return pull(s, true)
   if (stamp === local.baseStamp) {
     // ⚠ 中身が同じでも**版は控える**。控えないと、次の送信が古い版で断られ続け、
     // 取り込み直しても同じ所へ戻る（送れないまま無限に往復する）
@@ -187,12 +208,15 @@ export async function push(s: Session, clientId = '', tries = 2): Promise<SyncSt
   } catch (e) {
     // ⚠ 部屋が消えていたら、送り直しても意味が無い。呼び出し側に知らせる
     if (e instanceof RoomGoneError) return 'gone'
+    // ⚠ トークンが断られた時も同じ。送り直しても直らない（合言葉で入り直すまで）
+    if (e instanceof TokenRejectedError) return 'expired'
     if (e instanceof StaleError && tries > 0) {
       let again: Awaited<ReturnType<typeof pull>>
       try {
         again = await pull(s)
       } catch (e2) {
         if (e2 instanceof RoomGoneError) return 'gone'
+        if (e2 instanceof TokenRejectedError) return 'expired'
         return navigator.onLine ? 'pending' : 'offline'
       }
       // 同じ1件を双方が直していた＝利用者に選ばせる。勝手に決めない
@@ -227,9 +251,20 @@ export function applyRemote(
   roomId: string,
   remote: RoomState,
   rev: number,
-): 'adopted' | 'ahead' | 'merged' | 'conflict' {
+): 'adopted' | 'ahead' | 'merged' | 'conflict' | 'stale' {
   const local = read(roomId)
   const stamp = stampOf(remote)
+  /**
+   * 🔴 **手元より古い版は捨てる。**
+   *
+   * WebSocket は繋いだ瞬間の版を送ってくる。入り直した直後のように「繋ぐ」と「未送信を送る」が
+   * 同時に走ると、その版（送る前＝古い）の復号が送信の完了より後になり、「未送信なし」になった
+   * 端末が**送ったばかりの記録を古い版で上書きし、しかも「保存済み」と出していた**
+   * （2026-09-11、実ブラウザで踏んだ。サーバーには届いているので失われはしない）。
+   * ⚠ ただし**捨てるだけにしない**。版が本当に戻った時（運営者の時点復元）も同じ形で届く。
+   *   呼び出し側は 'stale' を受けたら取り込み直す（pull が一度取り直して、どちらかを見分ける）。
+   */
+  if (local && rev < (local.rev ?? 0)) return 'stale'
   if (!local || !local.dirty) {
     write(roomId, { state: remote, baseStamp: stamp, base: remote, rev, dirty: false })
     return 'adopted'

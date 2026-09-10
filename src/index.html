@@ -151,7 +151,7 @@
       .sync::before { content: "● "; }
       .sync.synced::before { color: var(--recv); }
       .sync.pending::before, .sync.offline::before { color: var(--pay); }
-      .sync.conflict { color: var(--pay); font-weight: 700; }
+      .sync.conflict, .sync.expired { color: var(--pay); font-weight: 700; }
       button.small { padding: .25rem .6rem; font-size: .8rem; }
       button.danger { border-color: var(--pay); color: var(--pay); }
       .chip { cursor: pointer; background: transparent; color: var(--fg); }
@@ -250,6 +250,11 @@
         <b>電波が戻りました。</b>合言葉をもう一度入れると、相手の記録と合流します。
         この端末で足した記録はそのまま残ります。
       </p>
+      <!-- 接続の期限（最後に合言葉で入ってから30日）が切れた部屋を入り直す時 -->
+      <p class="muted" id="expiredHint" hidden>
+        <b>接続の期限が切れています。</b>最後に合言葉で入ってから30日経つと、同期を続けるには入り直しが必要です。
+        この端末で足した記録はそのまま残り、入り直すと相手の記録と合流します。
+      </p>
       <p class="muted" id="offlineHint" hidden>
         <b>電波が無くても入れます。</b>合言葉を入れてください。
         相手の記録は、電波が戻ったときに合流します。
@@ -268,6 +273,8 @@
     <section id="room" hidden>
       <h1 id="roomName"></h1>
       <p class="sync synced" id="sync">保存済み</p>
+      <!-- 接続の期限が切れた時だけ出る。画面を勝手に切り替えず、本人が押した時に入り直す -->
+      <button class="ghost small" id="rejoinBtn" hidden>合言葉で入り直す</button>
       <p class="muted live" id="live"></p>
       <div id="conflict" hidden></div>
 

@@ -1,5 +1,6 @@
 import {
   RoomGoneError,
+  TokenRejectedError,
   createRoom,
   enterRoom,
   loadState,
@@ -247,6 +248,7 @@ async function doJoin() {
   // 解かないと、消した部屋に入り直した時に**書き込みが黙って全部捨てられる**
   revive(roomId)
   goneRooms.delete(roomId)
+  expiredRooms.delete(roomId)
   $('joinBtn').setAttribute('disabled', '')
   toast('合言葉から鍵を作っています…')
   try {
@@ -319,6 +321,7 @@ async function openRemembered(roomId: string) {
     if (navigator.onLine) {
       ;($('joinRoom') as HTMLInputElement).value = roomId
       $('offlineHint').hidden = true
+      $('expiredHint').hidden = true
       $('rejoinHint').hidden = false
       show('join')
     }
@@ -356,11 +359,13 @@ async function openRemembered(roomId: string) {
  */
 async function resync(s: Session): Promise<void> {
   if (goneRooms.has(s.roomId)) return onRoomGone(s)
+  if (expiredRooms.has(s.roomId)) return onTokenRejected(s)
   let result: Awaited<ReturnType<typeof pull>>
   try {
     result = await pull(s)
   } catch (e) {
     if (e instanceof RoomGoneError) return onRoomGone(s)
+    if (e instanceof TokenRejectedError) return onTokenRejected(s)
     throw e
   }
   if (result === 'conflict') return showConflict(s)
@@ -611,8 +616,10 @@ function startLive() {
   if (!session.token) return
   const s = session
   if (goneRooms.has(s.roomId)) return
+  if (expiredRooms.has(s.roomId)) return
   connectLive(s, {
     onGone: () => onRoomGone(s),
+    onExpired: () => onTokenRejected(s),
     onStatus: (connected) => {
       $('live').textContent = connected ? '他の端末とつながっています' : ''
     },
@@ -622,6 +629,11 @@ function startLive() {
         const remote = await decryptBlob(s, blob)
         // ⚠ 未送信の変更がある時は取り込まない。黙って上書きすると入力が消える
         const result = applyRemote(s.roomId, remote, rev)
+        // 'stale' ＝手元より古い版。送り終えた後に届いた送る前の版か、版が本当に戻ったか
+        // （運営者の時点復元）のどちらか。**ここでは見分けられないので、取り込み直して決める**
+        // （前者なら何も変わらず、後者なら戻った版を取り込む）。
+        // ⚠ 下の「保存済み」へ落とさないこと。未送信が残っていても保存済みと出てしまう
+        if (result === 'stale') return void resync(s).catch(() => {})
         if (result === 'conflict') return void showConflict(s)
         // 'ahead' ＝相手は動いていない。取り込むものは無いが、ローカルの変更も捨てない。
         // ここで state を remote に差し替えると、**入力したばかりの記録が画面から消える**
@@ -821,6 +833,8 @@ function persist() {
   commitLocal(session.roomId, state)
   // 消えた部屋へは送らない（送っても 404 が返るだけ）。端末の控えには残す
   if (goneRooms.has(session.roomId)) return renderSync('gone')
+  // 断られると分かっているトークンでは送らない。入り直した後の合流で送る
+  if (expiredRooms.has(session.roomId)) return renderSync('expired')
   renderSync('pending')
   void push(session, clientId).then(afterPush(session))
 }
@@ -848,6 +862,41 @@ function onRoomGone(s: import('./api.ts').Session) {
 }
 
 /**
+ * 🔴 **接続用のトークンが断られた（主に30日の期限切れ）。控えは消さない。知らせて、同期を止める。**
+ *
+ * 以前は 401 を「繋がらない」と同じに扱っていた。最後に合言葉で入ってから30日経った端末は
+ * 「未同期」のまま黙って止まり、合言葉を聞き直す経路も無かった＝以後足した記録はどこにも届かず、
+ * 1年の自動削除の期限も延びない（延ばすのは入室だけ＝PP §7）（2026-09-11 に発見）。
+ * ⚠ 画面を合言葉の入力へ**勝手に切り替えない**。中身は端末にあり、合言葉が手元に無くても
+ *   見られるべき（端末の控えは期限なく読める＝設計 §9）。入り直すのは本人が押した時だけ。
+ * ⚠ トークンは消さない。空にすると圏外入室（§9.1）の部屋と区別できなくなり、別の案内が出る。
+ *   断られたことはこのタブの間だけ覚える。開き直せば一度だけ問い合わせ、また断られて分かる。
+ */
+const expiredRooms = new Set<string>()
+function onTokenRejected(s: import('./api.ts').Session) {
+  const first = !expiredRooms.has(s.roomId)
+  expiredRooms.add(s.roomId)
+  if (session?.roomId !== s.roomId) return
+  disconnectLive()
+  // onRoomGone と同じ理由で、「つながっています」は自分で消す
+  $('live').textContent = ''
+  renderSync('expired')
+  if (first) toast('接続の期限が切れました。合言葉で入り直すと同期を再開します')
+  // ⚠ 見せる控えが無い（部屋の一覧にだけ残っている）なら、入り直す以外に進む先が無い
+  if (!localState(s.roomId)) startRejoin()
+}
+
+/** 期限が切れた部屋に、合言葉で入り直す。端末の控えは doJoin の3方向マージを通る＝消えない */
+function startRejoin() {
+  if (!session) return
+  ;($('joinRoom') as HTMLInputElement).value = session.roomId
+  $('offlineHint').hidden = true
+  $('rejoinHint').hidden = true
+  $('expiredHint').hidden = false
+  show('join')
+}
+
+/**
  * 🔴 **`push` が返す 'conflict' を捨てない。**
  *
  * 以前は全ての呼び出しが `.then(renderSync)` だけで、renderSync は帯の文字を
@@ -859,6 +908,7 @@ function afterPush(s: import('./api.ts').Session) {
   return (status: SyncStatus) => {
     if (status === 'conflict') return void showConflict(s)
     if (status === 'gone') return onRoomGone(s)
+    if (status === 'expired') return onTokenRejected(s)
     renderSync(status)
   }
 }
@@ -871,9 +921,11 @@ function renderSync(status: SyncStatus) {
     offline: 'オフライン（この端末には保存されています）',
     conflict: '他の端末の変更と食い違っています',
     gone: 'この旅行はサーバーから削除されています。この端末の控えだけが残っています（入口の「この端末から消す」で消せます）',
+    expired: '接続の期限が切れています。合言葉で入り直すと同期を再開します（この端末には保存されています）',
   }
   el.textContent = label[status]
   el.className = `sync ${status}`
+  $('rejoinBtn').hidden = status !== 'expired'
 }
 
 function addMember() {
@@ -1043,7 +1095,11 @@ document.addEventListener('click', (e) => {
   const el = e.target as HTMLElement
   if (el.id === 'createBtn') void doCreate()
   if (el.id === 'joinBtn') void doJoin()
-  if (el.id === 'toJoin') show('join')
+  if (el.id === 'toJoin') {
+    $('expiredHint').hidden = true
+    show('join')
+  }
+  if (el.id === 'rejoinBtn') startRejoin()
   if (el.id === 'toHome') {
     disconnectLive()
     renderHome()
@@ -1194,6 +1250,7 @@ async function offlineJoin(roomId: string, passphrase: string): Promise<boolean>
 function offerOfflineJoin(roomId: string) {
   if (!entryFromHash(location.hash)) return
   $('offlineHint').hidden = false
+  $('expiredHint').hidden = true
   $('offlineHint').dataset.room = roomId
 }
 
@@ -1218,6 +1275,7 @@ addEventListener('online', () => {
   // 合言葉で正式に入り直してもらう（#rejoinHint はこの瞬間のために書かれている）
   if (!s.token) {
     ;($('joinRoom') as HTMLInputElement).value = s.roomId
+    $('expiredHint').hidden = true
     $('rejoinHint').hidden = false
     return show('join')
   }
