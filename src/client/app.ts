@@ -24,7 +24,7 @@ import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins } from './origins.ts'
 import { getApiBase } from './config.ts'
-import { entryFromHash, entryUrl, emptyRoomForEntry } from './entry.ts'
+import { entryFromHash, entryForRoom, entryUrl, emptyRoomForEntry } from './entry.ts'
 import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
 import { KDF_VERSION } from '../types.ts'
 import {
@@ -261,7 +261,14 @@ async function doJoin() {
       const r = await pull(session)
       state = localState(roomId)
       remember(session, state?.name ?? '', entered.entry)
-      if (r === 'conflict') return showConflict(session)
+      // 🔴 **衝突の時も、先に部屋を出す。** 衝突パネルと状態の帯は部屋の画面の中にある。
+      // 以前は部屋を出さずに showConflict へ進んだので、画面は「合言葉で入る」のまま変わらず、
+      // 選ぶ手段が見えなかった（2026-09-11 の多観点照合で発見）。期限切れや圏外入室の後の
+      // 入り直しは、まさに端末とサーバーの双方が同じ1件を直している場面になりうる
+      if (r === 'conflict') {
+        renderRoom()
+        return showConflict(session)
+      }
       if (r === 'merged') toast('相手の記録と合わせました')
       renderSync(isDirty(roomId) ? 'pending' : 'synced')
       renderRoom()
@@ -286,6 +293,10 @@ async function doJoin() {
     if (!answered && (await offlineJoin(roomId, pass))) {
       $('joinBtn').removeAttribute('disabled')
       return
+    }
+    // 通信の失敗で入れなかったが、この端末には控えがある＝記録は無事だと伝える
+    if (!answered && localState(roomId)) {
+      return toast('つながりませんでした。この端末の記録はそのまま残っています。電波のある所でもう一度入ってください')
     }
     toast(
       msg.includes('invalid_key')
@@ -620,6 +631,8 @@ function startLive() {
   connectLive(s, {
     onGone: () => onRoomGone(s),
     onExpired: () => onTokenRejected(s),
+    // 繋がらない理由（圏外・トークン切れ・削除済み）は WebSocket では分からない＝HTTP で確かめる
+    onUnreachable: () => void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline')),
     onStatus: (connected) => {
       $('live').textContent = connected ? '他の端末とつながっています' : ''
     },
@@ -1037,14 +1050,14 @@ async function destroyRoom() {
       `続けるなら合言葉を入力してください。`,
   )
   if (!pass) return
+  const roomId = session.roomId
   try {
     const { deleteRoom } = await import('./api.ts')
-    await deleteRoom(session.roomId, pass)
-    disconnectLive()
-    dropLocal(session.roomId)
-    forget(session.roomId)
-    session = null
-    state = null
+    await deleteRoom(roomId, pass)
+    // 🔴 「この端末から消す」と同じ手順で消す（止める→書き戻し禁止の印→消す）。以前は印を付けずに
+    // 控えを消していたので、削除の往復中に届いた取り込みが控えを書き戻し、一覧に載らない
+    // **孤児**になりえた（2026-09-10 に「この端末から消す」側だけ直していた＝2026-09-11 の照合で発見）
+    forgetOnThisDevice(roomId)
     toast('消しました')
     renderHome()
   } catch (e) {
@@ -1221,8 +1234,14 @@ document.addEventListener('change', (e) => {
  * 記憶の中だけに置く＝盗まれた端末でできることを広げない。
  */
 async function offlineJoin(roomId: string, passphrase: string): Promise<boolean> {
-  const e = entryFromHash(location.hash)
+  // 🔴 券は URL の部屋にだけ使う（別の部屋の入口で鍵を作らない）
+  const e = entryForRoom(location.pathname, location.hash, roomId)
   if (!e) return false
+  // 🔴 **控えがある部屋は、圏外入室で上書きしない。** 圏外入室は「まだ何も持っていない」人の
+  // 入り方で、空の部屋を土台に書く。以前は控えの有無を見ずに書いていたので、入り直しが
+  // 通信の失敗で落ちると、**期限切れの間に足した未送信の記録ごと控えが空になり**、一覧の行も
+  // 名前とトークンを失っていた（2026-09-11 の多観点照合で発見・反証2票とも本物）。
+  if (localState(roomId)) return false
   revive(roomId) // 本人が券で入り直す＝明示の操作
   try {
     // ⚠ 静的 import であること。ここを遅延にすると **圏外で読み込めない**
@@ -1279,6 +1298,21 @@ addEventListener('online', () => {
     $('rejoinHint').hidden = false
     return show('join')
   }
+  void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline'))
+})
+
+/**
+ * 🔴 **画面に戻った時も、HTTP で確かめる。**
+ *
+ * 以前は WebSocket を張り直すだけだった。張り直しが 401（トークン切れ）や 404（削除済み）で
+ * 断られても理由は分からないので、背景から戻っただけのタブは「保存済み」のまま、トークン切れにも
+ * 削除にも気づけなかった（2026-09-11 の多観点照合で発見）。⚠ 圏外入室の部屋（token 無し）は
+ * online の側が合言葉を聞くので、ここでは触らない。
+ */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return
+  const s = session
+  if (!s || !s.token || $('room').hidden) return
   void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline'))
 })
 

@@ -18,14 +18,21 @@ import { dirname, join } from 'node:path'
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** PP・規約が画面の文言として引用しているもの（引用している箇所） */
+/**
+ * PP・規約が画面の文言として引用しているもの（引用している箇所・種類）。
+ * 種類 'button' は**ボタンの名前そのもの**として照合する（`>名前</button>`）。
+ * ⚠ 部分一致だけだと、ボタンの名前が別の文（状態欄やトースト）にも含まれる時に、
+ *   ボタンだけ変えても素通りする（「合言葉で入り直す」「この端末から消す」がそうだった＝
+ *   2026-09-11 の多観点照合で指摘）。
+ */
 const QUOTES = [
-  ['接続の期限が切れています。合言葉で入り直すと同期を再開します（この端末には保存されています）', 'PP §7'],
-  ['合言葉で入り直す', 'PP §7'],
-  ['この旅行はサーバーから削除されています。この端末の控えだけが残っています', 'PP §7'],
-  ['見つかりません（削除された可能性があります）', 'PP §7'],
-  ['この端末から消す', 'PP §2.1・§7／規約'],
+  ['接続の期限が切れています。合言葉で入り直すと同期を再開します（この端末には保存されています）', 'PP §7', 'text'],
+  ['合言葉で入り直す', 'PP §7', 'button'],
+  ['この旅行はサーバーから削除されています。この端末の控えだけが残っています', 'PP §7', 'text'],
+  ['見つかりません（削除された可能性があります）', 'PP §7', 'text'],
+  ['この端末から消す', 'PP §2.1・§7／規約', 'button'],
 ]
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // ⚠ 文書は折り返してあるので、改行と行頭の字下げを詰めてから探す（詰めないと長い引用が見つからない）
 const flat = (s) => s.replaceAll('**', '').replace(/\n[ \t]*/g, '')
@@ -41,7 +48,7 @@ const src =
   readFileSync(join(root, 'src/index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
 
 let bad = false
-for (const [text, where] of QUOTES) {
+for (const [text, where, kind] of QUOTES) {
   if (!docs.includes(text)) {
     console.error(
       `✘ 一覧の「${text}」が PP・規約に無い（${where} の引用が消えた・変わった）\n` +
@@ -49,9 +56,10 @@ for (const [text, where] of QUOTES) {
     )
     bad = true
   }
-  if (!src.includes(text)) {
+  const inUi = kind === 'button' ? new RegExp(`>\\s*${escapeRe(text)}\\s*</button>`).test(src) : src.includes(text)
+  if (!inUi) {
     console.error(
-      `✘ ${where} が画面の文言として引用している「${text}」が、実装に無い\n` +
+      `✘ ${where} が画面の文言として引用している「${text}」が、実装に${kind === 'button' ? 'ボタンの名前として' : ''}無い\n` +
         `  ⇒ 画面の文言を変えたなら、**PP が偽になっている**＝ビジネスハブへ連絡して引用を直してもらう`,
     )
     bad = true

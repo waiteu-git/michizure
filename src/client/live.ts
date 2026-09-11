@@ -18,6 +18,12 @@ type Handlers = {
   onGone?: () => void
   /** 🔴 トークンの期限が切れた。**繋ぎ直しは止める**。合言葉で入り直すまで直らない */
   onExpired?: () => void
+  /**
+   * 🔴 繋がらないことが続いた（3回ごと）。**呼び出し側は HTTP で理由を確かめる。**
+   * ハンドシェイクが 401（トークン切れ）や 404（削除済み）で断られても、ブラウザは理由を
+   * 渡さない＝ここでは通信の失敗と区別できない。
+   */
+  onUnreachable?: () => void
   /** ⚠ 版も渡す。これが無いと、受け取った側は次の書き込みで必ず断られる */
   onUpdate: (blob: { ciphertext: string; iv: string }, rev: number) => void
   onStatus: (connected: boolean) => void
@@ -26,6 +32,10 @@ type Handlers = {
 let socket: WebSocket | null = null
 let roomOf: string | null = null
 let retry = 0
+/** 一度も繋がらずに終わった接続が何回続いたか。繋がれば 0 に戻る（retry と違い wakeUp では戻さない） */
+let failedInRow = 0
+/** この回数ごとに onUnreachable を呼ぶ */
+const UNREACHABLE_EVERY = 3
 let stopped = false
 /** 予約してある繋ぎ直し。電波が戻ったら**取り消して**すぐ繋ぐので、握っておく */
 let pending: ReturnType<typeof setTimeout> | null = null
@@ -58,6 +68,7 @@ export function connectLive(s: Session, h: Handlers): void {
 export function disconnectLive(): void {
   stopped = true
   retry = 0
+  failedInRow = 0
   roomOf = null
   target = null
   // ⚠ 予約も取り消す。残しておくと、別の部屋へ移った後に発火して**前の部屋へ繋ぐ**
@@ -91,9 +102,12 @@ function open(s: Session, h: Handlers): void {
     return schedule(s, h)
   }
   socket = ws
+  let opened = false
 
   ws.addEventListener('open', () => {
+    opened = true
     retry = 0
+    failedInRow = 0
     h.onStatus(true)
   })
 
@@ -140,6 +154,8 @@ function open(s: Session, h: Handlers): void {
     socket = null
     h.onStatus(false)
     schedule(s, h)
+    // ⚠ 予約を先に置く。onUnreachable の先で disconnectLive されれば、その予約ごと取り消される
+    if (!opened && ++failedInRow % UNREACHABLE_EVERY === 0) h.onUnreachable?.()
   }
   ws.addEventListener('close', down)
   ws.addEventListener('error', down)

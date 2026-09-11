@@ -50,6 +50,19 @@ export function entryFromHash(hash: string): Entry | null {
 }
 
 /**
+ * 🔴 **この部屋に使ってよい入口券だけを返す。** 券は URL（`/r/<部屋ID>#k=…`）の部屋のもの。
+ *
+ * アプリは URL を書き換えないので、招待QRで開いたタブには `#k=` が残り続ける。そのタブで
+ * 入口の一覧から別の部屋を開き、入り直しが通信の失敗で落ちると、以前は**別の部屋の入口で
+ * 圏外入室し、その部屋の控えを空の部屋で上書きしていた**（2026-09-11 の多観点照合で発見）。
+ */
+export function entryForRoom(pathname: string, hash: string, roomId: string): Entry | null {
+  const m = pathname.match(/^\/r\/([0-9A-Z]{16})$/)
+  if (!m || m[1] !== roomId) return null
+  return entryFromHash(hash)
+}
+
+/**
  * 圏外入室した直後の状態。**土台は空**（＝入った人は何も持っていなかった）。
  * これは便宜ではなく実際に真の共通祖先なので、3方向マージが正しく効く。
  */

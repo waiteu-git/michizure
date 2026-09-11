@@ -287,3 +287,49 @@ describe('トークンの期限が切れた時', () => {
     expect([gone, expired]).toEqual([0, 1])
   })
 })
+
+/**
+ * 🔴 **繋がらないことが続いたら、HTTP で理由を確かめてもらう。**
+ *
+ * WebSocket のハンドシェイクが 401（トークン切れ）や 404（削除済み）で断られても、ブラウザは
+ * 理由を渡さない＝通信の失敗と区別できない。以前は黙って再試行を続けるだけで、画面は「保存済み」
+ * のまま、トークン切れにも削除にも気づけなかった（2026-09-11 の多観点照合で発見）。
+ */
+describe('繋がらないことが続いた時', () => {
+  it('3回続けて繋がらなければ onUnreachable を1回呼ぶ', () => {
+    let n = 0
+    connectLive(S, { ...noop, onUnreachable: () => n++ })
+    last().failToConnect()
+    runPending()
+    last().failToConnect()
+    runPending()
+    expect(n).toBe(0)
+    last().failToConnect()
+    expect(n).toBe(1)
+  })
+
+  it('失敗が続く限り、3回ごとに呼ぶ', () => {
+    let n = 0
+    connectLive(S, { ...noop, onUnreachable: () => n++ })
+    for (let i = 0; i < 6; i++) {
+      last().failToConnect()
+      if (i < 5) runPending()
+    }
+    expect(n).toBe(2)
+  })
+
+  it('間に1回でも繋がれば数え直す（負の対照）', () => {
+    let n = 0
+    connectLive(S, { ...noop, onUnreachable: () => n++ })
+    last().failToConnect()
+    runPending()
+    last().failToConnect()
+    runPending()
+    last().succeed()
+    // 繋がった後の切断は、ハンドシェイクの失敗ではない＝数えない
+    last().serverClose()
+    runPending()
+    last().failToConnect()
+    expect(n).toBe(0)
+  })
+})

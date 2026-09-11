@@ -103,6 +103,16 @@ for (const file of globSync('src/**/*.ts', { cwd: root })) {
   if (spreadsHeaders) {
     failures.push(`${file} が全ヘッダを展開している。IP を含むヘッダがログに出る`)
   }
+  // 全ヘッダを列挙するイディオム（2026-09-11 の多観点照合で、展開だけ見ていて列挙を拾わないと指摘）。
+  // ⚠ `headers: request.headers` のような**そのままの受け渡し**は拾わない。WebSocket の経路は
+  // Upgrade のために DO へ渡しており、読んではいない＝拾うと正当なコードを落とす（誤検知は無いより悪い）
+  const enumeratesHeaders =
+    /\bfor\s*\([^)]*\bof\s+[\w.]*headers\b/.test(source) ||
+    /headers\.(foreach|entries|keys|values)\(/.test(source) ||
+    /array\.from\(\s*[\w.]*headers/.test(source)
+  if (enumeratesHeaders) {
+    failures.push(`${file} が全ヘッダを列挙している。IP を含むヘッダが読まれる`)
+  }
   // request.cf は IP ではないが、国・市・ASN 等の位置情報を含む
   if (/\brequest\.cf\b|\breq\.cf\b/.test(source)) {
     failures.push(`${file} が request.cf を参照している。位置情報が入るので扱いを確認すること`)

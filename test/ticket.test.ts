@@ -15,6 +15,7 @@ import {
   decodeEntry,
   entryUrl,
   entryFromHash,
+  entryForRoom,
   emptyRoomForEntry,
 } from '../src/client/entry'
 import type { RoomState } from '../src/client/api'
@@ -165,5 +166,35 @@ describe('入口だけの券', () => {
 
   it('入った直後の土台は空の部屋', () => {
     expect(emptyRoomForEntry()).toEqual({ name: '', startDate: null, endDate: null, members: [], bookings: [] })
+  })
+})
+
+/**
+ * 🔴 **入口券は、URL の部屋にだけ使う。**
+ *
+ * アプリは URL を書き換えないので、部屋Aの招待QRで開いたタブには `#k=`（Aの入口）が残り続ける。
+ * そのタブで入口の一覧から部屋Bを開き、入り直しが通信の失敗で落ちると、以前は **Aの入口で
+ * Bに圏外入室し、Bの控えを空の部屋で上書きしていた**（2026-09-11 の多観点照合で発見）。
+ */
+describe('入口券を使ってよい部屋', () => {
+  const e = { kdfVersion: 2, iterations: 600_000, salt: 'AAAAAAAAAAAAAAAAAAAAAA==' }
+  const A = 'AAAAAAAAAAAAAAAA'
+  const B = 'BBBBBBBBBBBBBBBB'
+  const url = new URL(entryUrl('https://michizure.example', A, e))
+
+  it('URL の部屋なら券を返す', () => {
+    expect(entryForRoom(url.pathname, url.hash, A)).toEqual(e)
+  })
+
+  it('別の部屋には使わない（Aの券でBに入らない）', () => {
+    expect(entryForRoom(url.pathname, url.hash, B)).toBeNull()
+  })
+
+  it('部屋の URL でなければ使わない（入口の一覧から開いた時）', () => {
+    expect(entryForRoom('/', url.hash, A)).toBeNull()
+  })
+
+  it('券が無ければ null（負の対照）', () => {
+    expect(entryForRoom(url.pathname, '', A)).toBeNull()
   })
 })
