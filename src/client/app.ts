@@ -380,10 +380,24 @@ async function resync(s: Session): Promise<void> {
     throw e
   }
   if (result === 'conflict') return showConflict(s)
-  if (result === 'merged') toast('相手の記録と合わせました')
-  state = localState(s.roomId)
-  renderRoom()
-  renderSync(isDirty(s.roomId) ? 'pending' : 'synced')
+  /**
+   * 🔴 **pull の間に、別の部屋を開いた／合言葉で入り直したかもしれない。**
+   *
+   * このチェックの前は、画面復帰・接続失敗（C25）のたびに走る resync が、通信の遅れた
+   * 応答を**今見ている部屋の画面**へそのまま描いていた。その状態で記録を1件足すと、
+   * 今の部屋の控えとサーバーが、別の部屋の中身（他の参加者の名前や記録を含む）に
+   * 置き換わる＝**部屋を跨いだ開示**になる（2026-09-11 の多観点レビューで発見・
+   * DOM を差し替えた Node 上で再現した）。
+   * ⚠ **`push` はここでは止めない。** ローカルの控えは `roomId` ごとに独立しており、
+   * 今表示している部屋とは関係なく、s の部屋のサーバーへ届けるのが正しい（送らないと、
+   * 取り込んだ内容が次のマージの土台に反映されない）。危ないのは**画面**の側だけ。
+   */
+  if (session === s) {
+    if (result === 'merged') toast('相手の記録と合わせました')
+    state = localState(s.roomId)
+    renderRoom()
+    renderSync(isDirty(s.roomId) ? 'pending' : 'synced')
+  }
   if (isDirty(s.roomId)) void push(s, clientId).then(afterPush(s))
 }
 
@@ -539,6 +553,12 @@ function showBookingConflicts(s: import('./api.ts').Session, list: BookingConfli
 }
 
 async function showConflict(s: import('./api.ts').Session) {
+  // 🔴 **呼ばれた時点で、もう別の部屋・別のセッションを見ているかもしれない。**
+  // 呼び出し元（resync・afterPush）は通信を挟むので、その間に「入口に戻る」→別の部屋を開く／
+  // 合言葉で入り直す、が起きうる。ここで進めると、**今見ている部屋の画面に、別の部屋の
+  // 衝突パネルが出る**（2026-09-11 の多観点レビューで発見）。呼び出し元でチェックせず、
+  // ここに置く＝どの経路から呼ばれても一度だけ確かめれば足りる。
+  if (session !== s) return
   renderSync('conflict')
 
   // 🔴 件単位で解けた分は既にマージ済み。ここへ来るのは
@@ -864,6 +884,10 @@ function persist() {
  */
 const goneRooms = new Set<string>()
 function onRoomGone(s: import('./api.ts').Session) {
+  // 🔴 何度呼ばれてもトーストは初回だけ。画面復帰（visibilitychange）は削除済みの部屋を
+  // 開いたままでも毎回 resync を呼ぶので、印を付けずに毎回 toast すると、
+  // 戻るたびに同じ通知が繰り返し出る（2026-09-11 の多観点レビューで発見。onTokenRejected と同じ形）
+  const first = !goneRooms.has(s.roomId)
   goneRooms.add(s.roomId)
   if (session?.roomId !== s.roomId) return
   disconnectLive()
@@ -871,7 +895,7 @@ function onRoomGone(s: import('./api.ts').Session) {
   // 「他の端末とつながっています」が削除の表示と並んで残る（2026-09-11 に実ブラウザで見つけた）
   $('live').textContent = ''
   renderSync('gone')
-  toast('この旅行はサーバーから削除されています')
+  if (first) toast('この旅行はサーバーから削除されています')
 }
 
 /**
@@ -922,7 +946,10 @@ function afterPush(s: import('./api.ts').Session) {
     if (status === 'conflict') return void showConflict(s)
     if (status === 'gone') return onRoomGone(s)
     if (status === 'expired') return onTokenRejected(s)
-    renderSync(status)
+    // 🔴 送信中に別の部屋へ移った／入り直したかもしれない。resync と同じ理由（上のコメント）で、
+    // 帯（#sync）を今見ている部屋以外の状態で書き換えない。onRoomGone/onTokenRejected は
+    // roomId で内部に同じ守りを持つのでここでは触らない
+    if (session === s) renderSync(status)
   }
 }
 
