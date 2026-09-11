@@ -96,7 +96,7 @@ export function iterationsInvalid(iterations: unknown): boolean {
     iterations > MAX_ITERATIONS
   )
 }
-export const ROOM_TTL_MS = 365 * 24 * 60 * 60 * 1000 // 最終アクセスから1年
+export const ROOM_TTL_MS = 365 * 24 * 60 * 60 * 1000 // 最後の入室（作成を含む）から1年。書き込みでは延びない（PP §7）
 export const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30日
 
 /** サーバーが保持する暗号文。サーバーはこの中身を読めない */
