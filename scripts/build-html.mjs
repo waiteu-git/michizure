@@ -24,10 +24,24 @@ if (apiBase && !/^https:\/\//.test(apiBase)) {
   throw new Error(`MICHIZURE_API_BASE は https:// で始めること: ${apiBase}`)
 }
 
+// RevenueCat の公開APIキー（Shipaton 提出向け）。Web 配信では両方空のまま＝有料機能は出ない。
+// ⚠ 公開APIキーは秘密ではない（RevenueCat の設計上、クライアントに配る前提の値）。
+// 配布物に焼き込んでよい＝TOKEN_SECRET（wrangler secret）とは扱いが違う
+const revenuecatIosKey = (process.env.MICHIZURE_REVENUECAT_IOS_KEY ?? '').trim()
+const revenuecatAndroidKey = (process.env.MICHIZURE_REVENUECAT_ANDROID_KEY ?? '').trim()
+
 const out = src
   .replace(
     /(<meta name="michizure-api-base" content=")[^"]*(")/,
     (_, a, b) => `${a}${apiBase}${b}`,
+  )
+  .replace(
+    /(<meta name="michizure-revenuecat-ios-key" content=")[^"]*(")/,
+    (_, a, b) => `${a}${revenuecatIosKey}${b}`,
+  )
+  .replace(
+    /(<meta name="michizure-revenuecat-android-key" content=")[^"]*(")/,
+    (_, a, b) => `${a}${revenuecatAndroidKey}${b}`,
   )
   // HTML コメント。⚠ 条件付きコメントは使っていないので単純除去でよい
   .replace(/<!--[\s\S]*?-->/g, '')

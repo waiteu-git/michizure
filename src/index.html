@@ -15,6 +15,12 @@
     <meta name="robots" content="noindex, nofollow" />
     <!-- API の宛先。Web 配信では空＝相対パス。ネイティブのシェルへ入れる時だけ配信元を入れる -->
     <meta name="michizure-api-base" content="" />
+    <!--
+      RevenueCat の公開APIキー（Shipaton 提出向け）。Web 配信では両方空＝有料機能は出さない
+      （src/client/billing.ts）。プラットフォームごとに別のキーが要るので2つ持つ。
+    -->
+    <meta name="michizure-revenuecat-ios-key" content="" />
+    <meta name="michizure-revenuecat-android-key" content="" />
     <title>Michizure — 旅の費用を、道連れと</title>
 
     <!--
@@ -328,6 +334,20 @@
       <h2>精算</h2>
       <div id="summary"></div>
       <div id="transfers"></div>
+
+      <!--
+        CSV書き出し（有料機能）。Web配信では出さない＝サーバーに課金状態を持たせない
+        設計（9/4裁定）の帰結で、Web版に決済を持ち込むと帰属が定義できない
+        （src/client/billing.ts）。ネイティブのシェルの中でだけ表示する。
+      -->
+      <div class="actions" id="exportRow" hidden>
+        <button class="ghost small" id="exportBtn">CSVで書き出す</button>
+        <button class="link" id="restoreBtn">購入を復元</button>
+      </div>
+      <p class="muted" id="exportHint" hidden>
+        機種変・再インストールをすると、この端末での購入は引き継がれません。
+        <b>「購入を復元」</b>を押すと、同じストアアカウントでの購入を呼び戻せます。
+      </p>
 
       <div class="actions" style="margin-top:2.5rem">
         <button class="ghost" id="toHome">入口に戻る</button>

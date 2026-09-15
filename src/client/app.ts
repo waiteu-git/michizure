@@ -22,7 +22,7 @@ import {
 import { balances, advanced, settle, parts, isDone, shareSummary } from './settle.ts'
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
-import { shareOrigin, initOrigins } from './origins.ts'
+import { shareOrigin, initOrigins, billingKeys } from './origins.ts'
 import { getApiBase } from './config.ts'
 import { entryFromHash, entryForRoom, entryUrl, emptyRoomForEntry } from './entry.ts'
 import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
@@ -74,6 +74,10 @@ const passphraseModule = () => import('./passphrase.ts')
 const importModule = () => import('./import.ts')
 // QR は「QRを出す」を押した人だけが運ぶ（ライブラリが 7.6KB あるため）
 const qrModule = () => import('./qr.ts')
+// CSV書き出し（有料機能）は、押した人だけが運ぶ。billing はネイティブブリッジを
+// 抱える @capacitor/core を引き込むため、特に Web 配信の初回読み込みに含めたくない
+const billingModule = () => import('./billing.ts')
+const exportShareModule = () => import('./export-share.ts')
 
 /** 取り込んだ状態を一時的に持つ。「作る」を押した時に部屋の中身になる */
 let pendingImport: RoomState | null = null
@@ -741,7 +745,53 @@ function renderRoom() {
   renderMembers()
   renderBookings()
   renderSummary()
+  // Web 配信では出さない（billing.ts と同じ判定＝サーバーに課金状態を持たせない設計の帰結）
+  $('exportRow').hidden = !inNativeShell
+  $('exportHint').hidden = !inNativeShell
   show('room')
+}
+
+/**
+ * 🔴 **CSV書き出し（Shipaton の有料機能）。**
+ *
+ * 権利判定は圏外でも動く（`billing.ts`）ので、まず判定してから、無ければ購入を挟む。
+ * 判定・購入・書き出しのどこで失敗しても、利用者に理由が分かる形で止める
+ * （`lazy()` と同じ規律＝失敗を握り潰さない）。
+ */
+async function doExport() {
+  if (!state) return
+  const billing = await lazy(billingModule, '課金の確認')
+  if (!billing) return
+  const keys = billingKeys()
+  $('exportBtn').setAttribute('disabled', '')
+  try {
+    let ok = await billing.hasExportEntitlement(keys)
+    if (!ok) {
+      toast('購入手続きを開いています…')
+      const result = await billing.purchaseExport(keys)
+      if (result === 'cancelled') return // 静かに戻る。失敗ではない
+      if (result === 'no_offering') return toast('現在、購入できる状態ではありません')
+      if (result === 'failed') return toast('購入に失敗しました')
+      ok = true // 'purchased'
+    }
+    const share = await lazy(exportShareModule, 'CSVの書き出し')
+    if (!share) return
+    const { roomToCsv, csvFileName } = await import('./csv.ts')
+    await share.shareCsv(csvFileName(state.name), roomToCsv(state))
+  } catch (e) {
+    toast(`書き出しに失敗しました: ${e instanceof Error ? e.message : e}`)
+  } finally {
+    $('exportBtn').removeAttribute('disabled')
+  }
+}
+
+/** 機種変・再インストールで購入を引き継ぐ（端末帰属の代償を埋める導線） */
+async function doRestore() {
+  const billing = await lazy(billingModule, '購入の復元')
+  if (!billing) return
+  toast('復元しています…')
+  const ok = await billing.restore(billingKeys())
+  toast(ok ? '購入を復元しました' : 'この端末・アカウントでの購入履歴が見つかりませんでした')
 }
 
 function renderMembers() {
@@ -1149,6 +1199,8 @@ document.addEventListener('click', (e) => {
   if (el.id === 'saveBookingBtn') saveBooking()
   if (el.id === 'cancelEditBtn') cancelEdit()
   if (el.id === 'destroyRoomBtn') void destroyRoom()
+  if (el.id === 'exportBtn') void doExport()
+  if (el.id === 'restoreBtn') void doRestore()
   if (el.dataset.edit) startEdit(el.dataset.edit)
   if (el.dataset.del) deleteBooking(el.dataset.del)
   if (el.dataset.part) {

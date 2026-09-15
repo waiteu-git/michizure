@@ -27,3 +27,16 @@ export function shareOrigin(): string {
 export function wsOrigin(): string {
   return (getApiBase() || location.origin).replace(/^http/, 'ws')
 }
+
+/**
+ * RevenueCat の公開APIキー（`<meta>` から読む。焼き込みは `build-html.mjs`）。
+ * Web 配信では両方空のまま＝`billing.ts` はこれを渡されても configure しない。
+ */
+export function billingKeys(): { ios: string; android: string } {
+  const read = (name: string) =>
+    document.querySelector(`meta[name="${name}"]`)?.getAttribute('content')?.trim() ?? ''
+  return {
+    ios: read('michizure-revenuecat-ios-key'),
+    android: read('michizure-revenuecat-android-key'),
+  }
+}
