@@ -22,7 +22,7 @@
     "type": "git",
     "url": "git+https://github.com/waiteu-git/michizure.git"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.3",
     "esbuild": "^0.28.2",

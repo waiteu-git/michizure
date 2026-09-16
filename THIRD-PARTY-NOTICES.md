@@ -3,6 +3,10 @@
 Michizure は第三者の著作物を**再配布する**。ここはその義務を果たすための場所。
 リポジトリだけでなく**利用者へ配る JavaScript にも入る**ので、このファイルを消してはいけない。
 
+このリポジトリ自体のライセンスは `LICENSE`（Apache License 2.0・未改変）、
+短い帰属表示は `NOTICE` に在る。このファイルは `NOTICE` から参照される、
+再配布物の詳細な一覧（原著作物・取得元・ライセンス全文・派生させた理由）。
+
 > 🔴 **2026-09-05 の監査で発見**：この表示は**同日まで存在しなかった**。
 > リポジトリのどこにも MIT の許諾文（`Permission is hereby granted...`）が無く、
 > MIT に触れていたのは `wordlist/source/PROVENANCE.md`・`docs/passphrase-wordlist.md`・
