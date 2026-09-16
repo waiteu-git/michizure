@@ -121,11 +121,13 @@ on every device.
 **The API origin is read from a `<meta>` tag, not baked in at build time.** You can open the shipped
 artifact and see where it talks to. A build-time constant would be invisible.
 
-## Monetization — ⚠ DESIGNED, NOT BUILT
+## Monetization
 
-**RevenueCat is not integrated.** Only the dependency is installed; no purchase flow, no
-entitlement check, and no paid feature exists in this repository today. This section is the
-intended design, written so it can be reviewed — not something you can run.
+**RevenueCat is integrated**, in the native (Capacitor) shell only — the web build does nothing
+with it. It powers a single one-time purchase, gating a CSV export of the room's expenses and
+settlement. Configuration, purchase, and restore live in `src/client/billing.ts`; the exported
+file itself is built in `src/client/csv.ts` and handed to the OS share sheet by
+`src/client/export-share.ts`.
 
 The hard part is not checkout. It is that **this app has no accounts**, so there is no user to
 attach an entitlement to. Three options exist, and each costs something real:

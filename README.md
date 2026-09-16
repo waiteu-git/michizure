@@ -36,6 +36,9 @@ README はリポジトリの入口なので、**この1行だけを読んだ人�
   ＝入力は localStorage に残るが、**リロードするとアプリ自体が読み込めなかった**
 - **前のアプリからの取り込み**: travel-calculation の書き出しファイルを読む（`src/client/import.ts`）
 - **合言葉の生成**: 1,024語×5語 ≒ 50bit（`src/client/passphrase.ts`・`wordlist/`）
+- **CSV書き出し（ネイティブシェルのみ・課金）**: RevenueCat Capacitor SDK で一回きりの購入を1つ持つ
+  （エンタイトルメント識別子 `export`・匿名の端末帰属ID）。Web配信では何もしない
+  （`src/client/billing.ts` `csv.ts` `export-share.ts`。テストは `test/billing.test.ts` ほか）
 
 ### 残っているもの
 
@@ -43,7 +46,8 @@ README はリポジトリの入口なので、**この1行だけを読んだ人�
 - **公開ゲート4点**。正典＝`docs/before-launch-checklist.md` §C
 - **単語リストの目視確認**（同 §A-2）。機械で判定できる条件は全て通してあるが、
   **不快語と馴染みのなさは人にしか判定できない**
-- RevenueCat は**入っていない**（`package.json` に依存が在るだけ。`src/` から一度も import していない）
+- ストア側の商品登録（App Store Connect / Google Play Console）。RevenueCat 側の設定・
+  SDK 組込自体は完了済み（`docs/before-launch-checklist.md` A-4）
 
 ## 構成
 

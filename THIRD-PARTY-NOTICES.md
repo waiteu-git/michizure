@@ -18,10 +18,50 @@ Michizure は第三者の著作物を**再配布する**。ここはその義務
 > 🔴 **義務が発火するのは `npm run deploy` か、リポジトリを公開にした瞬間の早いほう。**
 > だからこの表示は**その前に**要る。「まだ渡していない」は「置かなくてよい」ではない。
 
-⚠ **再配布する第三者の著作物は、現時点でこの1件だけ**（2026-09-05 実測）。
-`package.json` の `@revenuecat/purchases-js` は依存に在るだけで `src/` から一度も import しておらず、
-バンドルにも入らない＝**配らないので義務も無い**。`public/index.html` に外部由来の
-スクリプト・フォント・スタイルは1つも無い。⇒ **依存表と再配布物は別物**。増やしたらここに足す。
+⚠ **再配布する第三者の著作物は、現時点で3件**（2026-09-16 実測で更新・元は2026-09-05に1件だった）。
+`package.json` の依存（`@capacitor/*`・`@revenuecat/purchases-capacitor`・`qrcode-generator` など）や
+iOS 側の SPM 依存（`Package.resolved` に記録・RevenueCat 5.88.0 ほか）は、依存として存在するだけで
+リポジトリに**同梱（バンドル）されていない**ので、この表には**足さない**（依存表と再配布物は別物）。
+足すのは、リポジトリに**ファイルの実体が入っているもの**だけ。`public/index.html` に外部由来の
+スクリプト・フォント・スタイルは1つも無い。増やしたらここに足す。
+
+---
+
+## Gradle Wrapper（Apache-2.0）
+
+### 何を再配布しているか
+
+| | |
+|---|---|
+| 原著作物 | Gradle Wrapper（`gradlew`・`gradlew.bat`・`gradle-wrapper.jar`・`gradle-wrapper.properties`） |
+| 取得元 | `npx cap add android`（Capacitor CLI）がプロジェクト生成時に同梱 |
+| ライセンス | **Apache License 2.0**（`android/gradlew` 冒頭のコメントに `Copyright © 2015-2021 the original authors` `SPDX-License-Identifier: Apache-2.0` と明記・実測） |
+| 原本の所在 | `android/gradle/wrapper/gradle-wrapper.jar`・`gradle-wrapper.properties`・`android/gradlew`・`android/gradlew.bat`（無改変） |
+| 配信物 | Android ビルド時にのみ使用。**利用者のブラウザ／アプリ本体には含まれない**（ビルドツールチェーンの一部） |
+
+⚠ ライセンス表示は各ファイル自身のヘッダコメントに同梱済み（Apache-2.0 は NOTICE 転記までは求めない）。
+ここに載せるのは「何を・どこから・どのライセンスで」再配布しているかの一覧としての記載。
+
+---
+
+## Capacitor プロジェクトテンプレート（MIT）
+
+### 何を再配布しているか
+
+| | |
+|---|---|
+| 原著作物 | Capacitor の iOS/Android プロジェクトテンプレート一式 |
+| 取得元 | `npx cap add ios` / `npx cap add android`（Capacitor CLI・`@capacitor/ios` `@capacitor/android` 由来のテンプレート） |
+| ライセンス | **MIT**（Capacitor 本体・Ionic（旧 Drifty Co.）が公開する OSS プロジェクトのテンプレート） |
+| 原本の所在 | `android/app/src/main/java/dev/waiteu/michizure/MainActivity.java`・`android/app/src/androidTest/**`・`android/app/src/test/**`・
+  `android/build.gradle`・`android/app/build.gradle`・`android/variables.gradle`・アイコン/スプラッシュのプレースホルダ画像群（`android/app/src/main/res/mipmap-*/**`・`drawable*/**`）・
+  `ios/App/App/AppDelegate.swift`・`ios/App/App/SceneDelegate.swift`・`ios/App/App/Base.lproj/**`・`ios/App/App/Assets.xcassets/**`（いずれも生成後ほぼ無改変） |
+| 配信物 | ネイティブアプリのビルド成果物（iOS/Android バイナリ）に組み込まれる。Web 配信（`public/`）には含まれない |
+
+⚠ これらのファイル自体には個別の著作権ヘッダが付いていない（テンプレート生成時点の慣習）。
+再配布の根拠は Capacitor 本体（ionic-team/capacitor 等）が MIT で公開しているプロジェクトテンプレートに
+由来すること。アイコン・スプラッシュ画像はストア提出前に自前のものへ差し替える予定＝差し替え後は
+この項目からアイコン類を外すこと（`docs/before-launch-checklist.md` 参照）。
 
 ---
 
