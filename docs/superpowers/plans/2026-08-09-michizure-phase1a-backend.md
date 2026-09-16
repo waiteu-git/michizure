@@ -126,6 +126,14 @@ cpu_ms = 50
 TOKEN_SECRET = "dev-only-secret-do-not-use-in-production"
 ```
 
+> 🔴 **2026-09-05 の監査でこの構成自体が欠陥だったと判明＝この計画のとおりには実装していない。**
+> `[vars]` の値は `wrangler deploy` のたびに**同名のリモートシークレットを上書きする**ため、
+> `wrangler secret put TOKEN_SECRET` で本番鍵を設定した**後に**デプロイすると、本番が
+> この開発用の値へ戻り、誰でもアクセストークンを偽造できる状態になる（実測・wrangler
+> 4.120.0）。実際の構成は開発用の値を `.dev.vars` に置く形に変更した（`wrangler.toml` に
+> `TOKEN_SECRET` を書いてはいけない）。詳細と検査は `scripts/check-privacy-config.mjs`・
+> README の「デプロイ」節を参照。**この計画の `wrangler.toml` 片を手順として辿らないこと。**
+
 `vitest.config.ts`:
 
 ```ts
@@ -1940,7 +1948,7 @@ it('本番の反復回数にかかる時間を測る', async () => {
 ```
 
 Run: `npx vitest run test/bench.test.ts`
-Expected: 実測値がログに出る。**入室のたびに1回だけ走る処理なので数秒までは許容する。** 極端に遅ければ `PBKDF2_ITERATIONS` を下げ、設計 §16 の未決事項へ実測値を記録する
+Expected: 実測値がログに出る。**入室のたびに1回だけ走る処理なので数秒までは許容する。** 極端に遅ければ `PBKDF2_ITERATIONS` を下げる（⚠ この計画作成時点では未決事項だったが、**2026-08-14 に実機測定のうえ 600,000 のまま据え置きで決着済み**。設計 §16・再litigate不要）
 
 - [ ] **Step 4: ローカルで起動して手で叩く**
 

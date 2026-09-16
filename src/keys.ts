@@ -1,5 +1,5 @@
 import { KDF_VERSION } from './types.ts'
-// 本番の反復回数。ローエンド端末で実測して調整すること（設計 §16 の未決事項）
+// 本番の反復回数。2026-08-14 に実機測定のうえ据え置きで確定済み（設計 §16・再litigate不要）
 export const PBKDF2_ITERATIONS = 600_000
 
 const enc = new TextEncoder()
