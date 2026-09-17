@@ -42,3 +42,9 @@ android/capacitor-cordova-android-plugins/
 
 # esbuild の構成表。build-sw.mjs が先読み一覧を決めるのに使う一時ファイル
 .build-meta.json
+
+# 2026-09-17 filter-repo で公開履歴から除外（法務下書きは未確定、監査台帳は内部限定の生情報）。
+# ローカル参照用に残すが二度とコミットしない。清書版は docs/security-review.md
+docs/legal/privacy-policy.draft.md
+docs/legal/terms.draft.md
+docs/audits/2026-08-10-phase1a-audit.md
