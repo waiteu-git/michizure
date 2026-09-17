@@ -48,3 +48,8 @@ android/capacitor-cordova-android-plugins/
 docs/legal/privacy-policy.draft.md
 docs/legal/terms.draft.md
 docs/audits/2026-08-10-phase1a-audit.md
+
+# 2026-09-17 filter-repo（2周目）で公開履歴から除外（統合ハブ指摘・内部の進行管理／工数見積り文書）。
+# ローカル参照用に残すが二度とコミットしない。
+docs/before-launch-checklist.md
+docs/shipaton-native-shell-estimate.md
