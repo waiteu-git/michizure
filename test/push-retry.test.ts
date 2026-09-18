@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 
 /**
  * 🔴 **同時に電波が戻った2台で、片方の記録が消えないこと。**
@@ -76,8 +76,19 @@ const realFetch = globalThis.fetch
   return Response.json({ ok: true, rev: accepted })
 }
 
-const { pull, push, commitLocal, localState, isDirty, applyRemote } =
-  await import('../src/client/store')
+const {
+  pull,
+  push,
+  commitLocal,
+  localState,
+  isDirty,
+  applyRemote,
+  hasUnresolvedConflict,
+  resolveBookings,
+  resolveKeepMine,
+  resolveTakeTheirs,
+  pendingConflictsOf,
+} = await import('../src/client/store')
 const { seal, open } = await import('../src/box')
 const { RoomGoneError, TokenRejectedError } = await import('../src/client/api')
 const { deriveKeys } = await import('../src/keys')
@@ -182,6 +193,167 @@ describe('送っている最中に相手が書いていた時', () => {
     // サーバーは相手の版のまま＝上書きしていない
     expect((await serverState()).bookings[0].amount).toBe(5000)
     expect(isDirty(ROOM)).toBe(true) // 端末の変更も捨てていない
+  })
+})
+
+/**
+ * 🔴 **衝突の選択が済むまで、端末の暫定版をサーバーへ送らない。**
+ *
+ * 衝突を見つけた時、端末は自分の版を暫定値として控え、土台と版番号を「今のサーバー」に進める
+ * （選んだ結果をそのまま送れるようにするため）。すると次の同期（電波の復帰・画面への復帰・
+ * WebSocket）は「変わっていない」と判定し、**未送信があるので暫定版を送り、受理されてしまう**。
+ * パネルで何も選んでいないのに相手の編集が上書きされる（2026-09-19、監査が再現）。
+ */
+describe('衝突の選択が済むまで', () => {
+  async function conflicted() {
+    await serverHolds({ ...empty, bookings: [bk('1', '夕食')] })
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, { ...empty, bookings: [{ ...bk('1', '夕食'), amount: 4000 }] })
+    await serverHolds({ ...empty, bookings: [{ ...bk('1', '夕食'), amount: 5000 }] })
+    expect(await push(s)).toBe('conflict')
+    expect((await serverState()).bookings[0].amount).toBe(5000)
+    expect(hasUnresolvedConflict(ROOM)).toBe(true)
+  }
+
+  it('次の取り込みと送信を続けても、相手の版を上書きしない', async () => {
+    await conflicted()
+    // 電波の復帰・画面への復帰で走る resync と同じ：取り込み→未送信があれば送る
+    expect(await pull(s)).toBe('unchanged')
+    expect(await push(s)).toBe('conflict')
+    expect((await serverState()).bookings[0].amount).toBe(5000)
+  })
+
+  it('WebSocket 経路（applyRemote が ahead）の後の送信でも、上書きしない', async () => {
+    await conflicted()
+    const theirs = await serverState()
+    expect(applyRemote(ROOM, theirs, server.rev)).toBe('ahead')
+    expect(await push(s)).toBe('conflict')
+    expect((await serverState()).bookings[0].amount).toBe(5000)
+  })
+
+  it('選んでいる間に足した記録は端末に残り、選び終えたら送られる（相手の版は消えない）', async () => {
+    await conflicted()
+    const list = pendingConflictsOf(ROOM)
+    expect(list).toHaveLength(1)
+    // パネルを見ている間に1件足した（端末には保存される。送信は保留のまま）
+    const now = localState(ROOM)!
+    commitLocal(ROOM, { ...now, bookings: [...now.bookings, bk('2', '朝食')] })
+    expect(await push(s)).toBe('conflict')
+    expect((await serverState()).bookings.map((b) => b.description)).toEqual(['夕食'])
+
+    // 「他の端末を残す」を選んだ → 相手の 5000 のまま、足した朝食も届く
+    const local = localState(ROOM)!
+    local.bookings = local.bookings.map((b) => (b.id === '1' ? list[0].theirs! : b))
+    resolveBookings(ROOM, local)
+    expect(hasUnresolvedConflict(ROOM)).toBe(false)
+    expect(await push(s)).toBe('synced')
+    const onServer = await serverState()
+    expect(onServer.bookings.find((b) => b.id === '1')!.amount).toBe(5000)
+    expect(onServer.bookings.map((b) => b.id).sort()).toEqual(['1', '2'])
+  })
+
+  it('選び終えたら（どの解決方法でも）保留は解ける', async () => {
+    await conflicted()
+    resolveKeepMine(ROOM, localState(ROOM)!, server.rev)
+    expect(hasUnresolvedConflict(ROOM)).toBe(false)
+    // 「この端末を残す」を選んだ＝そこで初めて自分の版がサーバーへ届く（選択の結果）
+    expect(await push(s)).toBe('synced')
+    expect((await serverState()).bookings[0].amount).toBe(4000)
+    await conflicted2()
+    resolveTakeTheirs(ROOM, await serverState(), server.rev)
+    expect(hasUnresolvedConflict(ROOM)).toBe(false)
+  })
+
+  /** 2度目の衝突を作る（1度目を解いた後の部屋で） */
+  async function conflicted2() {
+    const cur = localState(ROOM)!
+    commitLocal(ROOM, { ...cur, bookings: cur.bookings.map((b) => ({ ...b, amount: 7000 })) })
+    await serverHolds({ ...empty, bookings: [{ ...bk('1', '夕食'), amount: 8000 }] })
+    expect(await push(s)).toBe('conflict')
+    expect(hasUnresolvedConflict(ROOM)).toBe(true)
+  }
+
+  it('保留は相手が更に動いても解けない（相手の版を黙って上書きする形に戻らない）', async () => {
+    await conflicted()
+    // 相手が別の記録を足した。この時の取り込みは衝突を出さずにマージが成立しうるが、
+    // 「夕食」の食い違いは選ばれていないまま
+    await serverHolds({
+      ...empty,
+      bookings: [{ ...bk('1', '夕食'), amount: 5000 }, bk('9', '土産')],
+    })
+    await pull(s)
+    expect(hasUnresolvedConflict(ROOM)).toBe(true)
+    expect(await push(s)).toBe('conflict')
+    expect((await serverState()).bookings.find((b) => b.id === '1')!.amount).toBe(5000)
+  })
+
+  /**
+   * 🔴 印は端末の控えにある＝ページの読み直し・OS によるアプリの破棄・同じオリジンの別タブでも
+   * 消えない（メモリだけの印だった最初の版で、独立レビューが再現した穴）。
+   * 読み直しは、モジュールを作り直して同じ localStorage を読ませて表す。
+   */
+  it('ページを読み直した後も、暫定版を送らない（印は端末の控えにある）', async () => {
+    await conflicted()
+    vi.resetModules()
+    const fresh = await import('../src/client/store')
+    expect(fresh.hasUnresolvedConflict(ROOM)).toBe(true)
+    expect(await fresh.pull(s)).toBe('unchanged')
+    expect(await fresh.push(s)).toBe('conflict')
+    expect((await serverState()).bookings[0].amount).toBe(5000)
+  })
+
+  it('読み直した後に相手がさらに動いても、材料が無いので丸ごと選ばせる（暫定版は送らない）', async () => {
+    await conflicted()
+    vi.resetModules()
+    const fresh = await import('../src/client/store')
+    await serverHolds({
+      ...empty,
+      bookings: [{ ...bk('1', '夕食'), amount: 5000 }, bk('9', '土産')],
+    })
+    // 件別の材料はメモリにしか無い。マージを進めると、選んでいない食い違いが黙って通る
+    expect(await fresh.pull(s)).toBe('conflict')
+    expect(fresh.pendingConflictsOf(ROOM)).toHaveLength(0)
+    expect(await fresh.push(s)).toBe('conflict')
+    const onServer = await serverState()
+    expect(onServer.bookings.find((b) => b.id === '1')!.amount).toBe(5000)
+    expect(onServer.bookings.map((b) => b.id).sort()).toEqual(['1', '9'])
+  })
+
+  /**
+   * 🔴 選択待ちの間に、**別の1件**でも食い違った時。土台が既に相手の版へ進んでいるので、
+   * 最初の食い違いは「手元だけの変更」に見えて、今回の一覧から消える。消えたまま2件目だけ
+   * 選ぶと、最初の暫定版が黙って送られて相手の版が消える（独立レビューが再現）。
+   */
+  it('選択待ちの間に別の1件でも食い違っても、最初の食い違いは一覧に残る', async () => {
+    const at = (x: number, z: number): RoomState => ({
+      ...empty,
+      bookings: [{ ...bk('1', '夕食'), amount: x }, { ...bk('2', '朝食'), amount: z }],
+    })
+    await serverHolds(at(3000, 1000))
+    expect(await pull(s)).toBe('adopted')
+    commitLocal(ROOM, at(4000, 1000)) // 夕食を4000に
+    await serverHolds(at(5000, 1000)) // 相手は夕食を5000に
+    expect(await push(s)).toBe('conflict')
+
+    const cur = localState(ROOM)!
+    commitLocal(ROOM, { ...cur, bookings: cur.bookings.map((b) => (b.id === '2' ? { ...b, amount: 3333 } : b)) })
+    await serverHolds(at(5000, 2222)) // 相手は朝食も2222に
+    expect(await pull(s)).toBe('conflict')
+    const ids = pendingConflictsOf(ROOM).map((c) => (c.mine ?? c.theirs)!.id).sort()
+    expect(ids).toEqual(['1', '2']) // 最初の食い違い（夕食）が消えていない
+
+    // 2件とも「他の端末を残す」→ 相手の版のまま、送れる
+    const list = pendingConflictsOf(ROOM)
+    const local = localState(ROOM)!
+    for (const c of list) {
+      const id = (c.mine ?? c.theirs)!.id
+      local.bookings = local.bookings.map((b) => (b.id === id ? c.theirs! : b))
+    }
+    resolveBookings(ROOM, local)
+    expect(await push(s)).toBe('synced')
+    const onServer = await serverState()
+    expect(onServer.bookings.find((b) => b.id === '1')!.amount).toBe(5000)
+    expect(onServer.bookings.find((b) => b.id === '2')!.amount).toBe(2222)
   })
 })
 

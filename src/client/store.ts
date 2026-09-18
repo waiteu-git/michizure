@@ -46,6 +46,11 @@ type Local = {
   rev?: number
   /** 端末にあるがサーバーへ送れていない変更があるか */
   dirty: boolean
+  /**
+   * 🔴 衝突の**選択待ち**。**衝突を見つけた時だけ `true` を持ち、無い＝選択待ちではない。**
+   * 立っている間は端末の暫定版をサーバーへ送らない（`push`）。詳しくは `hasUnresolvedConflict`。
+   */
+  conflict?: true
 }
 
 export type SyncStatus = 'synced' | 'pending' | 'offline' | 'conflict' | 'gone' | 'expired'
@@ -76,12 +81,34 @@ export function revive(roomId: string): void {
   forgotten.delete(roomId)
 }
 
+/**
+ * 🔴 **衝突の選択が済んでいない部屋。選ぶまで、端末の暫定版をサーバーへ送らない。**
+ *
+ * 衝突を見つけた時、端末は自分の版を暫定値として控え、土台（base）と版番号（rev）を
+ * 「今のサーバー」へ進める（`mergeInto`）。選んだ結果をそのまま送れるようにするための作りだが、
+ * その副作用で、次の同期（電波の復帰・画面への復帰・WebSocket）は「変わっていない」と判定し、
+ * **未送信があるので暫定版を送り、受理されてしまう**＝パネルで何も選んでいないのに相手の
+ * 編集が上書きされた（2026-09-19、監査が再現。こちらでも現行コードで実測した）。
+ *
+ * ⚠ 印は**端末の控えに持つ**（`Local.conflict`）。最初はメモリだけに持たせたが、独立レビューで
+ *   「ページの読み直し・OS によるアプリの破棄・同じオリジンの別タブで、印が消えて暫定版が送られる」
+ *   と確認された（旅先のスマホでは破棄は日常）。端末の控えに欄を足したので、
+ *   `device-stored-fields.ts` に宣言し、PP §2.1 への反映はビジネスハブへ渡してある。
+ * ⚠ 解くのは**利用者の選択**（resolve*）か、控えが「送るものなし」になった時（＝印を持たない控えが
+ *   書かれた時）だけ。相手がさらに動いてマージが成立しても解かない＝成立した理由は「土台が相手の版に
+ *   進んでいて、暫定版だけが手元の変更に見える」からで、食い違いが選ばれたわけではない。
+ */
+export function hasUnresolvedConflict(roomId: string): boolean {
+  return read(roomId)?.conflict === true
+}
+
 function write(roomId: string, local: Local): void {
   if (forgotten.has(roomId)) return
   localStorage.setItem(KEY(roomId), JSON.stringify(local))
 }
 
 export function dropLocal(roomId: string): void {
+  clearPendingConflicts(roomId)
   localStorage.removeItem(KEY(roomId))
 }
 
@@ -103,6 +130,7 @@ export function isDirty(roomId: string): boolean {
  * 相手の記録を空で上書きする。
  */
 export function adoptAsBase(roomId: string, state: RoomState): void {
+  clearPendingConflicts(roomId)
   // ⚠ 版は 0＝まだサーバーを見ていない。最初の送信は断られ、取り込んでから送り直す
   write(roomId, { state, baseStamp: null, base: state, rev: 0, dirty: false })
 }
@@ -112,6 +140,7 @@ export function adoptAsBase(roomId: string, state: RoomState): void {
  * ⚠ 「未送信の変更」にしないこと。取ってきたばかりの物を送り返す理由は無い。
  */
 export function adoptRemote(roomId: string, state: RoomState, rev: number): void {
+  clearPendingConflicts(roomId)
   write(roomId, { state, baseStamp: stampOf(state), base: state, rev, dirty: false })
 }
 
@@ -124,6 +153,8 @@ export function commitLocal(roomId: string, state: RoomState): void {
     base: prev?.base ?? null,
     rev: prev?.rev ?? 0,
     dirty: true,
+    // 選択待ちの間に足した記録でも、印は外さない（外れると次の同期で暫定版が送られる）
+    ...(prev?.conflict ? { conflict: true as const } : {}),
   })
 }
 
@@ -176,6 +207,8 @@ export async function pull(
 export async function push(s: Session, clientId = '', tries = 2): Promise<SyncStatus> {
   const local = read(s.roomId)
   if (!local || !local.dirty) return 'synced'
+  // 🔴 衝突の選択待ち。端末には残す（commitLocal 済み）が、サーバーへは送らない
+  if (local.conflict) return 'conflict'
   try {
     const rev = await saveState(s, local.state, clientId, local.rev ?? 0)
     // 🔴 送っている**間に足された記録**を巻き戻さない。
@@ -278,6 +311,7 @@ export function applyRemote(
 
   // ① 中身が同じ＝自分の push が中継されて戻ってきた。送信済みとして扱う
   if (stamp === stampOf(local.state)) {
+    clearPendingConflicts(roomId)
     write(roomId, { state: local.state, baseStamp: stamp, base: local.state, rev, dirty: false })
     return 'adopted'
   }
@@ -308,11 +342,13 @@ export async function conflictSides(
  * サーバーへ送れない（古い版として断られ続ける）。
  */
 export function resolveKeepMine(roomId: string, state: RoomState, rev: number): void {
-  // ⚠ 土台は残す。共通の祖先は「自分が選んだ版」ではない
+  clearPendingConflicts(roomId)
+  // ⚠ 土台は残す。共通の祖先は「自分が選んだ版」ではない。選択待ちの印は付けない（＝外れる）
   write(roomId, { state, baseStamp: null, base: read(roomId)?.base ?? null, rev, dirty: true })
 }
 
 export function resolveTakeTheirs(roomId: string, state: RoomState, rev: number): void {
+  clearPendingConflicts(roomId)
   write(roomId, { state, baseStamp: stampOf(state), base: state, rev, dirty: false })
 }
 
@@ -336,6 +372,13 @@ function mergeInto(
   rev: number,
 ): 'merged' | 'conflict' {
   if (!local.base) return 'conflict'
+  // 🔴 **選択待ちなのに、件別の材料（メモリ）が無い**＝ページの読み直し・OS によるアプリの破棄の後。
+  // ここでマージすると、土台が既に相手の版へ進んでいるので、選んでいない食い違い（暫定版）が
+  // 「手元だけの変更」に見えて黙って通り、**前の食い違いが一覧から消える**（独立レビューで再現）。
+  // 材料が無い時は何も進めず、丸ごと選ばせる側（呼び出し側の 'conflict'）へ倒す。
+  const prior = pendingConflicts?.roomId === roomId ? pendingConflicts.list : null
+  if (local.conflict && prior === null) return 'conflict'
+
   const { state, conflicts } = merge3(local.base, local.state, remote)
 
   if (conflicts.length) {
@@ -357,27 +400,46 @@ function mergeInto(
       base: remote,
       rev,
       dirty: true,
+      conflict: true,
     })
-    pendingConflicts = { roomId, list: conflicts }
+    // 🔴 選択待ちだった食い違いを**引き継ぐ**。土台が進んでいるので、今回のマージでは
+    // 「手元だけの変更」に見えて衝突として上がってこない（上がってこないまま選択が済むと、
+    // 暫定版が黙って送られて相手の版が消える）。今回また食い違った件は新しい方を使う。
+    const idOf = (c: BookingConflict) => (c.mine ?? c.theirs ?? c.base)!.id
+    const carried = (prior ?? []).filter((p) => !conflicts.some((c) => idOf(c) === idOf(p)))
+    // ⚠ 引き継いだ件の暫定版は足さない（マージ結果に「手元の変更」として既に入っている）
+    pendingConflicts = { roomId, list: [...conflicts, ...carried] }
     return 'conflict'
   }
 
-  pendingConflicts = null
-  write(roomId, { state, baseStamp: stampOf(remote), base: remote, rev, dirty: true })
+  // ⚠ 選択待ちの部屋は、ここで印も一覧も解かない（`hasUnresolvedConflict` の説明を参照）
+  if (!local.conflict) pendingConflicts = null
+  write(roomId, {
+    state,
+    baseStamp: stampOf(remote),
+    base: remote,
+    rev,
+    dirty: true,
+    ...(local.conflict ? { conflict: true as const } : {}),
+  })
   return 'merged'
 }
 
 /**
- * 直前のマージで解けなかった予約。呼び出し側が利用者へ出す。
- * ⚠ **取ったら消すこと。** 消さないと、別の部屋を開いた時に前の部屋の予約が
- * 解決パネルへ出る（2026-09-07 のレビューで指摘）。部屋も照合する。
+ * 選択待ちの、解けなかった予約。呼び出し側が利用者へ出す。
+ *
+ * ⚠ **読んでも消さない。** 消すのは選択が済んだ時（`resolve*`）と、控えを捨てた時だけ。
+ *   以前は取ったら消していたが、パネルを出し直す（入口へ戻って開き直す）時と、選択待ちの間に
+ *   さらに食い違いが起きた時に、**前の食い違いの材料が無くなる**（独立レビューの指摘）。
+ * ⚠ 部屋を照合する。別の部屋を開いた時に前の部屋の予約が解決パネルへ出ないように
+ *   （2026-09-07 のレビューで指摘）。メモリだけに持つ＝読み直すと無い（印は控えに残る）。
  */
 let pendingConflicts: { roomId: string; list: BookingConflict[] } | null = null
-export function takePendingConflicts(roomId: string): BookingConflict[] {
-  if (!pendingConflicts || pendingConflicts.roomId !== roomId) return []
-  const { list } = pendingConflicts
-  pendingConflicts = null
-  return list
+export function pendingConflictsOf(roomId: string): BookingConflict[] {
+  return pendingConflicts?.roomId === roomId ? pendingConflicts.list : []
+}
+function clearPendingConflicts(roomId: string): void {
+  if (pendingConflicts?.roomId === roomId) pendingConflicts = null
 }
 
 /**
@@ -386,6 +448,7 @@ export function takePendingConflicts(roomId: string): BookingConflict[] {
  * ここで「今サーバーにある版」を名乗ると、取り込んでいない物まで上書きしてしまう。
  */
 export function resolveBookings(roomId: string, state: RoomState): void {
+  clearPendingConflicts(roomId)
   const prev = read(roomId)
   write(roomId, {
     state,

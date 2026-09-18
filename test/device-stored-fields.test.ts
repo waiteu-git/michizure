@@ -65,6 +65,26 @@ describe('端末に保存するもの', () => {
   })
 
   /**
+   * 🔴 衝突の選択待ちの間だけ、控えに `conflict` が付く（それ以外の時は付かない）。
+   * 付く欄は**宣言した任意の欄だけ**＝ここを通らずに知らない欄が増えるのを止める。
+   */
+  it('衝突の選択待ちの間だけ、宣言した任意の欄（conflict）が付く', () => {
+    const bk = (amount: number) => ({ id: 'Y', category: '食費', description: '夕食', payer: 'a', amount, participants: ['a'], paid: {} })
+    const withY = (amount: number): RoomState => ({ ...room([]), bookings: [bk(amount)] })
+    store.adoptRemote(ROOM, withY(3000), 1)
+    store.commitLocal(ROOM, withY(4000))
+    const key = DEVICE_STORED.state.keyPrefix + ROOM
+    expect(JSON.parse(mem.get(key)!).conflict).toBeUndefined() // 衝突前は付かない
+    expect(store.applyRemote(ROOM, withY(5000), 2)).toBe('conflict')
+    const during = JSON.parse(mem.get(key)!) as Record<string, unknown>
+    expect(during.conflict).toBe(true)
+    expect(Object.keys(during).sort()).toEqual([...DEVICE_STORED.state.fields, ...DEVICE_STORED.state.optionalFields].sort())
+    // 選び終えたら外れる
+    store.resolveKeepMine(ROOM, withY(4000), 2)
+    expect(JSON.parse(mem.get(key)!).conflict).toBeUndefined()
+  })
+
+  /**
    * ⚠ PP に書くべき事実を、ここで固定する＝**消した記録が、次の同期成功まで端末に平文で残る**。
    * 仕様として直せない（base は3方向マージの真の共通祖先でなければならない）ので、開示で扱う。
    */

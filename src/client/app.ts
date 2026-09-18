@@ -32,7 +32,8 @@ import {
   commitLocal,
   adoptRemote,
   localState,
-  takePendingConflicts,
+  pendingConflictsOf,
+  hasUnresolvedConflict,
   adoptAsBase,
   isDirty,
   pull,
@@ -274,7 +275,13 @@ async function doJoin() {
         return showConflict(session)
       }
       if (r === 'merged') toast('相手の記録と合わせました')
-      renderSync(isDirty(roomId) ? 'pending' : 'synced')
+      // 🔴 前に見つけた衝突の選択がまだ済んでいない（同じページで入口へ戻って入り直した）なら、
+      // 送らずにパネルを出し直す。送ると、選んでいない暫定版が相手の版を上書きする
+      if (hasUnresolvedConflict(roomId)) {
+        renderRoom()
+        return showConflict(session)
+      }
+      renderSync(statusFor(roomId, 'synced'))
       renderRoom()
       if (isDirty(roomId)) void push(session, clientId).then(afterPush(session))
     } else {
@@ -349,7 +356,7 @@ async function openRemembered(roomId: string) {
   if (cached) {
     state = cached
     renderRoom()
-    renderSync(isDirty(roomId) ? 'pending' : 'synced')
+    renderSync(statusFor(roomId, 'synced'))
   }
 
   try {
@@ -384,6 +391,8 @@ async function resync(s: Session): Promise<void> {
     throw e
   }
   if (result === 'conflict') return showConflict(s)
+  // 🔴 選択待ちなのにパネルが出ていない（入口へ戻って開き直した等）なら、出し直す
+  if (hasUnresolvedConflict(s.roomId) && !isConflictPanelOpen(s.roomId)) return showConflict(s)
   /**
    * 🔴 **pull の間に、別の部屋を開いた／合言葉で入り直したかもしれない。**
    *
@@ -400,9 +409,10 @@ async function resync(s: Session): Promise<void> {
     if (result === 'merged') toast('相手の記録と合わせました')
     state = localState(s.roomId)
     renderRoom()
-    renderSync(isDirty(s.roomId) ? 'pending' : 'synced')
+    renderSync(statusFor(s.roomId, 'synced'))
   }
-  if (isDirty(s.roomId)) void push(s, clientId).then(afterPush(s))
+  // 選択待ちの間は送らない（push も断るが、ここで呼ぶと帯が一瞬「未同期」に戻る）
+  if (isDirty(s.roomId) && !hasUnresolvedConflict(s.roomId)) void push(s, clientId).then(afterPush(s))
 }
 
 /**
@@ -524,12 +534,15 @@ function showBookingConflicts(s: import('./api.ts').Session, list: BookingConfli
       </div>`,
       )
       .join('')
-  $('conflict').hidden = false
+  openConflictPanel(s.roomId)
 
   const chosen = new Map<number, Booking | null>()
   $('conflict').onclick = (e) => {
     const el = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null
     if (!el?.dataset.cf) return
+    // 🔴 別の部屋を開いた後の古いパネルからは、何も確定させない（別の部屋の内容を
+    // 今の部屋へ書き込み、送ってしまう）
+    if (session?.roomId !== s.roomId) return
     const i = Number(el.dataset.i)
     chosen.set(i, el.dataset.cf === 'mine' ? list[i].mine : list[i].theirs)
     el.closest('.card')?.classList.add('done')
@@ -550,7 +563,7 @@ function showBookingConflicts(s: import('./api.ts').Session, list: BookingConfli
     // 件別の解決はマージ済みの上に載るので、控えてある版のままでよい
     resolveBookings(s.roomId, local)
     state = local
-    $('conflict').hidden = true
+    closeConflictPanel()
     renderRoom()
     void push(s, clientId).then(afterPush(s))
   }
@@ -564,13 +577,20 @@ async function showConflict(s: import('./api.ts').Session) {
   // ここに置く＝どの経路から呼ばれても一度だけ確かめれば足りる。
   if (session !== s) return
   renderSync('conflict')
+  // 🔴 **画面の state を、端末の控え（相手の追加を併合した暫定版）へ揃える。**
+  // 揃えないと、パネルを開いたまま記録を足した時に、古い版の上へ積んで commitLocal され、
+  // **併合済みの相手の追加が端末から消える**（2026-09-19、監査の指摘）。
+  state = localState(s.roomId) ?? state
+  // ⚠ 部屋の画面を見ている時だけ描く。入口へ戻った後に遅れて衝突が届いても、
+  // 画面を部屋へ引き戻さない（renderRoom は部屋を出し、接続も張り直す）
+  if (!$('room').hidden) renderRoom()
 
   // 🔴 件単位で解けた分は既にマージ済み。ここへ来るのは
   // **同じ1件を双方が別々に直した**時だけ。丸ごと選ばせるのは土台が無い時に限る。
   // 🔴 **件別の衝突は通信せずに出す。** マージは既にローカルで済んでおり、版も控えてある。
   // ここで通信を挟むと、電波が切れた瞬間に起きた衝突の解決手段が画面に出ない
   // （2026-09-07 のレビューで指摘。まさに圏外で起きる衝突を解けなくしていた）。
-  const perBooking = takePendingConflicts(s.roomId)
+  const perBooking = pendingConflictsOf(s.roomId)
   if (perBooking.length) return showBookingConflicts(s, perBooking)
 
   // 丸ごと選ぶ経路（土台が無い時）だけは、相手の版を取りに行く必要がある
@@ -585,18 +605,20 @@ async function showConflict(s: import('./api.ts').Session) {
       <button id="keepMine">こちらを残す</button></div>
     <div class="row"><span>他の端末（${count(sides.theirs)}）</span>
       <button class="ghost" id="takeTheirs">こちらを残す</button></div>`
-  $('conflict').hidden = false
+  openConflictPanel(s.roomId)
   $('keepMine').onclick = () => {
+    if (session?.roomId !== s.roomId) return // 別の部屋を開いた後の古いパネル
     // 押した時点のローカル＝パネルを見ている間に足した記録も残る
     const mine = localState(s.roomId)
     if (!mine) return
     resolveKeepMine(s.roomId, mine, sides.rev)
     state = mine
-    $('conflict').hidden = true
+    closeConflictPanel()
     renderRoom()
     void push(s, clientId).then(afterPush(s))
   }
   $('takeTheirs').onclick = async () => {
+    if (session?.roomId !== s.roomId) return // 別の部屋を開いた後の古いパネル
     // 押した時点のサーバー側を取り直す。表示していた版はもう古いかもしれない
     let now: Awaited<ReturnType<typeof conflictSides>>
     try {
@@ -607,7 +629,7 @@ async function showConflict(s: import('./api.ts').Session) {
     const theirs = now.theirs
     resolveTakeTheirs(s.roomId, theirs, now.rev)
     state = theirs
-    $('conflict').hidden = true
+    closeConflictPanel()
     renderRoom()
     renderSync('synced')
   }
@@ -656,14 +678,14 @@ function startLive() {
     onGone: () => onRoomGone(s),
     onExpired: () => onTokenRejected(s),
     // 繋がらない理由（圏外・トークン切れ・削除済み）は WebSocket では分からない＝HTTP で確かめる
-    onUnreachable: () => void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline')),
+    onUnreachable: () => void resync(s).catch(() => renderSync(statusFor(s.roomId, 'offline'))),
     // ⚠ 帯（#sync）は一本に統一する。以前は「他の端末とつながっています」を
     // 別の帯（#live）に持っていたが、意味がほぼ重なって二重表示になっていた
     // （2026-09-18 に本人指摘）。既存の「未同期/オフライン」判定と同じ基準
     // （isDirty）に合わせるだけで、新しい状態は増やさない
     onStatus: (connected) => {
       if (session !== s) return
-      renderSync(isDirty(s.roomId) ? 'pending' : connected ? 'synced' : 'offline')
+      renderSync(statusFor(s.roomId, connected ? 'synced' : 'offline'))
     },
     onUpdate: async (blob, rev) => {
       try {
@@ -993,7 +1015,23 @@ function startRejoin() {
  */
 function afterPush(s: import('./api.ts').Session) {
   return (status: SyncStatus) => {
-    if (status === 'conflict') return void showConflict(s)
+    // 🔴 送信の中で「断られる→取り込む→送り直す」が走ると、相手の追加が端末の控えへ
+    // 併合されるが、画面の state は古いまま。**次の記録の追加がその古い state を控えへ書き戻し、
+    // 併合済みの相手の追加を端末（と、続けて送ればサーバー）から消す**（独立レビューの指摘）。
+    // 描き直しは控えと違う時だけ（入力中のフォームを毎回は消さない）。
+    if (session === s) {
+      const cur = localState(s.roomId)
+      if (cur && JSON.stringify(cur) !== JSON.stringify(state)) {
+        state = cur
+        if (!$('room').hidden) renderRoom() // 入口を見ている時に部屋へ引き戻さない
+      }
+    }
+    if (status === 'conflict') {
+      // 選択待ちのパネルが既に開いているなら作り直さない。作り直すと、通信なしで出せる
+      // 件別の材料（取り出し済み）が失われ、通信が要る丸ごとの選択へ落ちる
+      if (session === s && isConflictPanelOpen(s.roomId)) return renderSync('conflict')
+      return void showConflict(s)
+    }
     if (status === 'gone') return onRoomGone(s)
     if (status === 'expired') return onTokenRejected(s)
     // 🔴 送信中に別の部屋へ移った／入り直したかもしれない。resync と同じ理由（上のコメント）で、
@@ -1001,6 +1039,30 @@ function afterPush(s: import('./api.ts').Session) {
     // roomId で内部に同じ守りを持つのでここでは触らない
     if (session === s) renderSync(status)
   }
+}
+
+/**
+ * 帯（#sync）に出す状態。**衝突の選択待ちは、未同期や保存済みに書き換えない。**
+ * 選ぶまで端末の暫定版は送らない（store.ts の `hasUnresolvedConflict`）ので、帯が「未同期」や
+ * 「保存済み」に戻ると、選ぶ必要があることが見えなくなる。
+ */
+function statusFor(roomId: string, clean: SyncStatus): SyncStatus {
+  if (hasUnresolvedConflict(roomId)) return 'conflict'
+  return isDirty(roomId) ? 'pending' : clean
+}
+
+/** 衝突パネルが今どの部屋のものを出しているか。開いている間は作り直さない（選びかけを壊す） */
+let conflictPanelRoom: string | null = null
+function openConflictPanel(roomId: string) {
+  $('conflict').hidden = false
+  conflictPanelRoom = roomId
+}
+function closeConflictPanel() {
+  $('conflict').hidden = true
+  conflictPanelRoom = null
+}
+function isConflictPanelOpen(roomId: string): boolean {
+  return conflictPanelRoom === roomId && !$('conflict').hidden
 }
 
 function renderSync(status: SyncStatus) {
@@ -1192,6 +1254,8 @@ document.addEventListener('click', (e) => {
   if (el.id === 'rejoinBtn') startRejoin()
   if (el.id === 'toHome') {
     disconnectLive()
+    // 入口へ戻る＝この部屋の衝突パネルは閉じる（開き直せば、選択待ちの印から出し直す）
+    closeConflictPanel()
     renderHome()
   }
   if (el.id === 'enterRoomBtn') renderRoom()
@@ -1377,7 +1441,7 @@ addEventListener('online', () => {
     $('rejoinHint').hidden = false
     return show('join')
   }
-  void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline'))
+  void resync(s).catch(() => renderSync(statusFor(s.roomId, 'offline')))
 })
 
 /**
@@ -1392,7 +1456,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
   const s = session
   if (!s || !s.token || $('room').hidden) return
-  void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline'))
+  void resync(s).catch(() => renderSync(statusFor(s.roomId, 'offline')))
 })
 
 // URL が /r/<roomId> なら、その部屋を開こうとする（合言葉は URL に入れない＝設計 §7.6.1 ②）

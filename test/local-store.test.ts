@@ -13,7 +13,7 @@ const mem = new Map<string, string>()
   },
 }
 
-const { commitLocal, applyRemote, localState, isDirty, adoptRemote, takePendingConflicts, markForgotten, revive } =
+const { commitLocal, applyRemote, localState, isDirty, adoptRemote, pendingConflictsOf, resolveBookings, markForgotten, revive } =
   await import('../src/client/store')
 import type { RoomState } from '../src/client/api'
 
@@ -149,7 +149,7 @@ describe('衝突した時に残る物', () => {
     adoptRemote(ROOM, room([bk('Y', 3000)]), 1)
     commitLocal(ROOM, room([bk('Y', 4000)]))
     applyRemote(ROOM, room([bk('Y', 5000), bk('Z', 800)]), 2)
-    const list = takePendingConflicts(ROOM)
+    const list = pendingConflictsOf(ROOM)
     expect(list).toHaveLength(1)
     expect(list[0].mine?.amount).toBe(4000)
     expect(list[0].theirs?.amount).toBe(5000)
@@ -157,7 +157,9 @@ describe('衝突した時に残る物', () => {
 })
 
 /**
- * ⚠ 取ったら消すこと。消さないと**別の部屋を開いた時に前の部屋の予約が解決パネルへ出る**。
+ * ⚠ 読んでも消さない（パネルの出し直しと、選択待ちの間の2度目の食い違いで、前の材料が要る）。
+ *   消すのは選択が済んだ時だけ。部屋は照合する＝**別の部屋を開いた時に前の部屋の予約が
+ *   解決パネルへ出ない**。
  */
 describe('解けなかった予約の受け渡し', () => {
   beforeEach(() => { mem.clear(); rev = 0 })
@@ -173,15 +175,21 @@ describe('解けなかった予約の受け渡し', () => {
     applyRemote(ROOM, room([bk('Y', 5000)]), 2)
   }
 
-  it('二度目は空（取ったら消える）', () => {
+  it('読んでも消えない（パネルを出し直せる）', () => {
     stage()
-    expect(takePendingConflicts(ROOM)).toHaveLength(1)
-    expect(takePendingConflicts(ROOM)).toHaveLength(0)
+    expect(pendingConflictsOf(ROOM)).toHaveLength(1)
+    expect(pendingConflictsOf(ROOM)).toHaveLength(1)
+  })
+
+  it('選択が済んだら消える', () => {
+    stage()
+    resolveBookings(ROOM, room([bk('Y', 5000)]))
+    expect(pendingConflictsOf(ROOM)).toHaveLength(0)
   })
 
   it('別の部屋には渡さない', () => {
     stage()
-    expect(takePendingConflicts('ROOM0000000000BB')).toHaveLength(0)
+    expect(pendingConflictsOf('ROOM0000000000BB')).toHaveLength(0)
   })
 })
 
