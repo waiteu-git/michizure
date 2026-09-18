@@ -38,6 +38,21 @@ describe('部屋の作成', () => {
     expect(a.roomId).not.toBe(b.roomId)
   })
 
+  it('速度制限に引っかかると 429 を返す', async () => {
+    // ⚠ test/setup.ts が ROOM_CREATE_LIMITER を常に成功させている（本番の
+    // しきい値をテストの都合で決めないため）。ここだけ一時的に差し替えて、
+    // handleCreateRoom が実際に 429 を返す配線を確かめる
+    const original = env.ROOM_CREATE_LIMITER
+    env.ROOM_CREATE_LIMITER = { limit: async () => ({ success: false }) }
+    try {
+      const res = await createRoom()
+      expect(res.status).toBe(429)
+      expect(await res.json()).toEqual({ error: 'rate_limited' })
+    } finally {
+      env.ROOM_CREATE_LIMITER = original
+    }
+  })
+
   it('authKey がなければ拒否する', async () => {
     expect((await createRoom({ authKey: '' })).status).toBe(400)
   })

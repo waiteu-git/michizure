@@ -6,4 +6,9 @@ import { defineConfig } from 'vitest/config'
 // 同梱の codemod `codemods/vitest-v3-to-v4` が示す新しい書き方に合わせている。
 export default defineConfig({
   plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.toml' } })],
+  test: {
+    // 部屋作成の速度制限（ROOM_CREATE_LIMITER）をテストの都合で緩めないための無効化。
+    // 理由は test/setup.ts のコメントを見ること
+    setupFiles: ['./test/setup.ts'],
+  },
 })
