@@ -657,8 +657,13 @@ function startLive() {
     onExpired: () => onTokenRejected(s),
     // 繋がらない理由（圏外・トークン切れ・削除済み）は WebSocket では分からない＝HTTP で確かめる
     onUnreachable: () => void resync(s).catch(() => renderSync(isDirty(s.roomId) ? 'pending' : 'offline')),
+    // ⚠ 帯（#sync）は一本に統一する。以前は「他の端末とつながっています」を
+    // 別の帯（#live）に持っていたが、意味がほぼ重なって二重表示になっていた
+    // （2026-09-18 に本人指摘）。既存の「未同期/オフライン」判定と同じ基準
+    // （isDirty）に合わせるだけで、新しい状態は増やさない
     onStatus: (connected) => {
-      $('live').textContent = connected ? '他の端末とつながっています' : ''
+      if (session !== s) return
+      renderSync(isDirty(s.roomId) ? 'pending' : connected ? 'synced' : 'offline')
     },
     onUpdate: async (blob, rev) => {
       try {
@@ -941,9 +946,6 @@ function onRoomGone(s: import('./api.ts').Session) {
   goneRooms.add(s.roomId)
   if (session?.roomId !== s.roomId) return
   disconnectLive()
-  // ⚠ 接続を先に手放すので「切れた」の通知（onStatus(false)）は来ない。自分で消さないと
-  // 「他の端末とつながっています」が削除の表示と並んで残る（2026-09-11 に実ブラウザで見つけた）
-  $('live').textContent = ''
   renderSync('gone')
   if (first) toast('この旅行はサーバーから削除されています')
 }
@@ -965,8 +967,6 @@ function onTokenRejected(s: import('./api.ts').Session) {
   expiredRooms.add(s.roomId)
   if (session?.roomId !== s.roomId) return
   disconnectLive()
-  // onRoomGone と同じ理由で、「つながっています」は自分で消す
-  $('live').textContent = ''
   renderSync('expired')
   if (first) toast('接続の期限が切れました。合言葉で入り直すと同期を再開します')
   // ⚠ 見せる控えが無い（部屋の一覧にだけ残っている）なら、入り直す以外に進む先が無い

@@ -163,7 +163,6 @@
       .chip { cursor: pointer; background: transparent; color: var(--fg); }
       .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
       #parts { display: flex; flex-wrap: wrap; gap: .1rem; margin-bottom: .3rem; }
-      .live { font-size: .78rem; margin: -1rem 0 1rem; }
     </style>
   </head>
   <body>
@@ -281,7 +280,6 @@
       <p class="sync synced" id="sync">保存済み</p>
       <!-- 接続の期限が切れた時だけ出る。画面を勝手に切り替えず、本人が押した時に入り直す -->
       <button class="ghost small" id="rejoinBtn" hidden>合言葉で入り直す</button>
-      <p class="muted live" id="live"></p>
       <div id="conflict" hidden></div>
 
       <h2>メンバー</h2>

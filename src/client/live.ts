@@ -198,3 +198,21 @@ addEventListener('online', wakeUp)
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) wakeUp()
 })
+
+/**
+ * 🔴 **`close`/`error` 頼みだと「切れた」に何十秒も気づけない。**
+ *
+ * ブラウザは機内モードのような物理的な切断を、TCP のタイムアウトに頼らず
+ * `offline` イベントで即座に教えてくれる。ここで真っ先に画面を「繋がっていない」
+ * 側へ倒す。2026-09-17 の撮影で「機内モードにしても表示が変わらない」を実測して発覚。
+ *
+ * 🔴 **`drop()` も呼ぶこと。** 呼ばずに `onStatus(false)` だけ倒すと、死んでいる
+ * ソケットの `readyState` が `OPEN` のまま残り、電波が戻った時の `wakeUp()` が
+ * 「もう繋がっている」と誤認して再接続をスキップする（`online` は来るが繋ぎ直らない、
+ * という形で同日の撮影中に実測）。`drop()` で空にしておけば `wakeUp()` が素直に繋ぎ直す。
+ */
+addEventListener('offline', () => {
+  if (!target || stopped) return
+  target.h.onStatus(false)
+  drop()
+})
