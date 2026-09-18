@@ -12,7 +12,7 @@
 //   コメント中の一致で誤検出が多く、使えなかった）。
 //
 // 使い方: node scripts/check-pp-ui-quotes.mjs [ルート]   ※ルートの指定は対照を当てる時だけ
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -36,10 +36,14 @@ const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // ⚠ 文書は折り返してあるので、改行と行頭の字下げを詰めてから探す（詰めないと長い引用が見つからない）
 const flat = (s) => s.replaceAll('**', '').replace(/\n[ \t]*/g, '')
-const docs = flat(
-  readFileSync(join(root, 'docs/legal/privacy-policy.draft.md'), 'utf8') +
-    readFileSync(join(root, 'docs/legal/terms.draft.md'), 'utf8'),
-)
+// ⚠ PP・規約の下書きは公開リポジトリに含めない（履歴からも除外済み）＝公開クローンには無い。
+// 「見られなかった」と明示して通す（黙って通さない）
+const docPaths = ['docs/legal/privacy-policy.draft.md', 'docs/legal/terms.draft.md'].map((f) => join(root, f))
+if (!docPaths.every((f) => existsSync(f))) {
+  console.log('PP・規約の引用の照合: 省略（docs/legal/*.draft.md は公開リポジトリに含まれない）')
+  process.exit(0)
+}
+const docs = flat(docPaths.map((f) => readFileSync(f, 'utf8')).join(''))
 // ⚠ コメントは除く。除かないと、説明に書いた文言が「画面にある」と数えられる
 const src =
   readFileSync(join(root, 'src/client/app.ts'), 'utf8')

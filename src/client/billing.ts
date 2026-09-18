@@ -90,7 +90,7 @@ export async function purchaseExport(keys: BillingKeys): Promise<PurchaseResult>
 
 /**
  * 機種変・再インストールで購入を引き継ぐ唯一の手段（端末帰属の代償を埋める導線）。
- * `docs/shipaton-native-shell-estimate.md` の「復元導線を最初から入れる」に対応。
+ * 購入の帰属が端末なので、この導線が無いと機種変で購入が失われる（最初から入れておく）。
  */
 export async function restore(keys: BillingKeys): Promise<boolean> {
   if (!(await ensureConfigured(keys))) return false

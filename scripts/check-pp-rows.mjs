@@ -12,12 +12,18 @@
 // ⚠ PP の文言はビジネスハブ所管。ここが落ちたら宣言を直すか、PP の直しを BH へ頼む（勝手に PP を直さない）。
 //
 // 使い方: node scripts/check-pp-rows.mjs [PP のパス]   ※パスの指定は対照（別の版の PP）を当てる時だけ
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ppPath = process.argv[2] ?? join(root, 'docs/legal/privacy-policy.draft.md')
+// ⚠ PP の下書きは公開リポジトリに含めない（履歴からも除外済み）＝公開クローンには無い。
+// その時だけ「見られなかった」と明示して通す。パスを**明示した**のに無い場合は誤りなので落とす
+if (process.argv[2] === undefined && !existsSync(ppPath)) {
+  console.log('PP の行の照合: 省略（docs/legal/privacy-policy.draft.md は公開リポジトリに含まれない）')
+  process.exit(0)
+}
 const { SERVER_STORED } = await import(join(root, 'src/server-stored-fields.ts'))
 const { DEVICE_STORED } = await import(join(root, 'src/client/device-stored-fields.ts'))
 

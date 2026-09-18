@@ -8,6 +8,18 @@ import { SERVER_STORED } from '../src/server-stored-fields'
 const FAST = 100_000
 
 /**
+ * 条件が真になるまで待つ（上限つき）。固定の sleep は初回コールド実行で足りず落ちる
+ * ＝公開クローンの初回で実際に落ちた（2026-09-19）。待つ対象は「時間」でなく「事象」。
+ */
+async function until(cond: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+  const start = Date.now()
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error(`待っている事象が起きなかった: ${what}`)
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+/**
  * 🔴 **サーバーが部屋ごとに保存するものを、宣言（src/server-stored-fields.ts）と突き合わせる。**
  *
  * 2026-09-07 に `rev` を足した時、公開予定のプライバシーポリシー §2 は「更新の回数は持っていない」
@@ -155,13 +167,15 @@ describe('改変したクライアントが余分な欄を足しても', () => {
     }
     const writer = await open('writer')
     const reader = await open('reader')
-    await new Promise((r) => setTimeout(r, 100))
+    // サーバーは接続を受けた直後に init を送る＝それが届けば DO に登録済み
+    await until(() => writer.got.some((m) => m.type === 'init'), 'writer への init')
+    await until(() => reader.got.some((m) => m.type === 'init'), 'reader への init')
     writer.ws.send(JSON.stringify({
       type: 'update',
       blob: { ...(await seal(room.encKeyBits, { name: 'WSから' })), blobVersion: 1, ...EXTRA },
       baseRev: room.rev,
     }))
-    await new Promise((r) => setTimeout(r, 200))
+    await until(() => reader.got.some((m) => m.type === 'update'), '他の端末への update 中継')
     expect(await blobKeysOf(room.roomId)).toEqual(['blobVersion', 'ciphertext', 'iv'])
     const relayed = reader.got.find((m) => m.type === 'update')
     expect(relayed, '他の端末に中継が届いていること').toBeTruthy()

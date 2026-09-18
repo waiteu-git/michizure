@@ -8,7 +8,7 @@
     "dev": "npm run build:client && wrangler dev",
     "predeploy": "npm test",
     "deploy": "npm run build:client && wrangler deploy",
-    "pretest": "node scripts/check-privacy-config.mjs && node scripts/check-wordlist.mjs && node scripts/check-icons.mjs && node scripts/check-public-surface.mjs && node scripts/check-stored-fields.mjs && node scripts/check-pp-rows.mjs && node scripts/check-pp-ui-quotes.mjs && node scripts/check-license-banner.mjs",
+    "pretest": "npm run build:client && node scripts/check-privacy-config.mjs && node scripts/check-wordlist.mjs && node scripts/check-icons.mjs && node scripts/check-public-surface.mjs && node scripts/check-stored-fields.mjs && node scripts/check-pp-rows.mjs && node scripts/check-pp-ui-quotes.mjs && node scripts/check-license-banner.mjs",
     "build:wordlist": "node scripts/build-wordlist.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
