@@ -10,8 +10,14 @@ class_name = "Room"
 tag = "v1"
 new_sqlite_classes = ["Room"]
 
-[limits]
-cpu_ms = 50
+# ⚠ `[limits] cpu_ms` は【有料プラン専用】。無料プランでは deploy が
+# `CPU limits are not supported for the Free plan [code: 100328]` で失敗する
+# （2026-09-18 の初回本番デプロイで実測）。元の値 50 は計画書
+# docs/superpowers/plans/2026-08-09-michizure-phase1a-backend.md:121 から
+# 写したもので、実測に基づいていなかった。設計書
+# docs/superpowers/specs/2026-08-09-michizure-phase1-design.md:118 は
+# そもそも無料枠を前提にしている＝この3行の方が設計と食い違っていた。
+# ⇒ 有料プランへ移るまで書かない。書くなら実測してから。
 
 # 🔴 消してはいけない。新規 Worker では observability は【既定で有効】であり、
 # 書かないと Cloudflare 側にログが保存される（無料プランで3日保持）。
