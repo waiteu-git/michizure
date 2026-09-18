@@ -6,14 +6,23 @@
 >
 > **Still required before this replaces `README.md` or goes public:**
 > 1. **Fill the Demo placeholders** (video link + 1–2 screenshots) — the section ships blank otherwise.
-> 2. **Re-measure every number.** They have already moved three times (9,441 → 10,864 → 11,402 → 11,493).
+>    Blocked on filming (target window 2026-09-19–23).
+> 2. 🔴 **Re-measure every number** — reopened 2026-09-18. The 2026-09-17 numbers below are stale:
+>    the connection-indicator fix (`navigator.onLine`) landing today changes the bundle and likely
+>    the test count. Do not treat any row below as current until re-measured after that fix lands
+>    and the video is re-shot. (Also still true from before: "every asset the app can ever fetch"
+>    has an unresolved methodology question — see the note under that table.)
 > 3. **Pre-publication scrub audit.**
 > 4. ⚠ Making the repository public is a **human-only** action and is not implied by any of the above.
 >
-> 🔴 **Numbers moved twice on 2026-09-05 and both moves are instructive.** A figure of 9,441 B was
+> 🔴 **The first-load number has moved four times; all four are instructive.** A figure of 9,441 B was
 > quoted for the first load; it counted only `index.html + app.js` and assumed every esbuild chunk was
 > lazy, when one is a **static** import. Corrected to 10,864 B. Then a second audit added a service
-> worker and several fixes, moving it to **11,402 B**. Anything quoting the older figures is stale.
+> worker and several fixes, moving it to 11,402 B. A third pass corrected a leftover error to
+> **11,493 B (2026-09-06)**. **On 2026-09-17 it moved again, to 17,893 B** — this time not a
+> measurement correction: CSV-export and billing (RevenueCat) call-site code shipped and its
+> non-lazy portion is now in the static bundle (the RevenueCat SDK itself remains lazy-loaded and is
+> confirmed absent from the static chunks). Anything quoting an older figure is stale.
 > ⚠ The built bundle is **not committed** (`public/app.js`, `public/chunk-*.js`, `public/sw.js` are
 > gitignored so a stale copy cannot linger) — reproduce the numbers with `npm run build:client` first.
 
@@ -59,7 +68,7 @@ So this is not a better spreadsheet. It is a **narrower tool that gives up diffe
 | Accounts, sign-up, password reset | A room is a URL plus a passphrase. Nothing to create, nothing to lose but the passphrase |
 | The server being able to read your data | It is also **unable to help you recover it**. A lost passphrase is unrecoverable |
 | Reading IP addresses in our own code | Abuse has to be throttled at the platform layer instead of in code. **This does not mean no IP is recorded anywhere** — see below |
-| A framework | **11,493 bytes gzipped** before the app is usable, and it keeps working with no network |
+| A framework | **17,893 bytes gzipped** before the app is usable, and it keeps working with no network |
 | Automatic merge of conflicting edits | Conflicts are **shown to you**, never silently resolved |
 
 ## What the server actually holds
@@ -147,22 +156,28 @@ signal must decide what a paying user sees when RevenueCat cannot be reached.
 
 ## Measured numbers
 
-Measured with `gzip -9` after `npm run build:client`. **Every row carries its own measurement date** — the first-load figure moved twice on 2026-09-05 and again on 2026-09-06, each time because unrelated code changed. A number without a date in this table is a bug.
+Measured with `gzip -9` after `npm run build:client`. **Every row carries its own measurement date** — the first-load figure moved on 2026-09-05, 2026-09-06, and 2026-09-17. The first two moves were measurement corrections; the 2026-09-17 move was a real increase, from CSV-export and billing (RevenueCat) call-site code shipping — the RevenueCat SDK itself stays lazy-loaded and is confirmed absent from the static chunks. A number without a date in this table is a bug.
 
 | | |
 |---|---|
-| **Before the app is usable** (2026-09-06) | **11,493 B** — HTML 3,416 + app 6,399 + two shared chunks (908 + 770) |
-| Fetched only when creating a room (2026-09-06) | 4,600 B (word list + passphrase generation) |
-| Fetched only when importing old data (2026-09-06) | 1,021 B |
-| Service worker (does not block first paint, 2026-09-06) | 956 B |
-| Every asset the app can ever fetch (2026-09-06) | 18,263 B |
+| **Before the app is usable** (2026-09-17) | **17,893 B** — HTML 4,628 + app 10,488 + three shared chunks (795 + 1,213 + 769) |
+| Fetched only when creating a room (2026-09-17) | 4,599 B (word list + passphrase generation) |
+| Fetched only when importing old data (2026-09-17) | 1,021 B (re-verified, unchanged) |
+| Service worker (does not block first paint, 2026-09-17) | 1,125 B |
+| Every asset the app can ever fetch (2026-09-17) | 46,974 B — see note below |
 | Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests (run 2026-09-06) | **137** |
+| Tests (run 2026-09-17) | **291** (25 files) |
 | Room auto-deletion | 365 days after last access |
 | Ciphertext ceiling enforced by the server | 256 KiB |
 
 The KDF timing is **one device**. It is fast enough that no per-device tuning was needed, but it is
 not a claim about phones in general.
+
+**Note on "every asset the app can ever fetch":** this grew from 18,263 B (2026-09-06) to 46,974 B
+(2026-09-17). Real features shipped in between — CSV export, billing, QR-code room entry (whose
+chunk alone is 7,825 B) — but whether the two figures were counted the same way has not been
+confirmed; the 2026-09-06 per-chunk breakdown was not kept to check against. Treat this row as
+directional, not as a clean before/after comparison, until that is checked.
 
 ## Run locally
 
@@ -177,7 +192,7 @@ npm run dev      # builds the client bundle, then starts wrangler dev
 that point — you can stop the server and reload, and it still works.
 
 ```bash
-npm test         # 137 tests; the pretest step also checks the privacy config and the word list
+npm test         # 291 tests; the pretest step also checks the privacy config and the word list
 npm run typecheck
 npm run build:wordlist   # regenerates the word list and its bundled copy from one source pass
 ```
@@ -203,6 +218,10 @@ entry **replaces** the deployed secret.
 - **This encryption is not verifiable by you.** We serve the JavaScript that does the encrypting.
   We design it so we cannot read your data, and we will not claim more than that.
 - **Metadata is not encrypted** — see "What the server actually holds".
+- **The connection indicator does not probe reachability.** It now flips the moment the device
+  loses its network interface — airplane mode, for instance — but a connection that is up but going
+  nowhere is only noticed when the socket itself fails. Your data is not affected either way — it is
+  saved to the device first, regardless of what the indicator says.
 - **A live WebSocket is not re-checked against token expiry.** The token is verified when the
   connection opens; a connection left open can keep sending updates after the token would have
   expired.
@@ -210,8 +229,9 @@ entry **replaces** the deployed secret.
   starts at the 5th failure (1 minute) and doubles to at most 1 hour, clearing after 24 hours
   without failures. Because our code cannot tell clients apart, the block lands on the room rather
   than on whoever caused it.
-- **Room creation is unauthenticated and unthrottled in code.** Throttling depends on a platform
-  rule configured outside this repository.
+- **Room creation is unauthenticated.** It is throttled by a global rate limit (not per-client —
+  our code does not read IP addresses), configured in `wrangler.toml` and enforced in
+  `handleCreateRoom`.
 - **The 20-member cap is enforced only in this client.** The server cannot check it.
 
 ## 日本語（要約）
