@@ -2,6 +2,13 @@ name = "michizure"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
+# 🔴 Preview URL の名前空間は無効化する。「Durable Object を持つ Worker には
+# Preview URL が生えない」という Cloudflare の既定は、初回本番デプロイ（2026-09-18）の
+# 実測で【完全には効いていない】と判明した（版 43193a3c が Worker として実行され
+# 500/Error 1101 を返した＝ルーティングは生きていた）。撮り直しのたびに何度もデプロイする
+# 予定なので、これが無いと「直す前の版」が旧 preview URL で恒久的に読める状態になる。
+preview_urls = false
+
 [[durable_objects.bindings]]
 name = "ROOM"
 class_name = "Room"
@@ -9,6 +16,18 @@ class_name = "Room"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+# 🔴 部屋の作成は無認証・無制限（設計上 IP を読まないため）。2026-09-18 の監査で
+# 「コード側では防げない」という前提が偽と判明＝Workers Rate Limiting binding は
+# キーに任意の文字列を取り、IP を必要としない（公式もむしろ IP 使用を非推奨とする）。
+# ⇒ IP を読まない方針とそのまま両立する。前身 travel-calculation の事故（無認証入口が
+# 約1ヶ月見えっぱなしだった）と同じ形の穴を、本番へ出た初日に塞ぐ。
+# キーは固定文字列＝クライアントを区別しない【全体】の速度制限（handleCreateRoom 側で使用）。
+# namespace_id はこの Worker 内だけで一意ならよいローカルな番号（Cloudflare への事前登録は不要）。
+[[ratelimits]]
+name = "ROOM_CREATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 100, period = 60 }
 
 # ⚠ `[limits] cpu_ms` は【有料プラン専用】。無料プランでは deploy が
 # `CPU limits are not supported for the Free plan [code: 100328]` で失敗する

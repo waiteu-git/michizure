@@ -18,6 +18,8 @@ export interface Env {
   ROOM: DurableObjectNamespace
   TOKEN_SECRET: string
   ASSETS: Fetcher
+  /** ⚠ 部屋作成の速度制限。キーは固定文字列＝クライアントを区別しない全体の上限（IPを読まない方針のため） */
+  ROOM_CREATE_LIMITER: RateLimit
 }
 
 function roomStub(env: Env, roomId: string) {
@@ -38,6 +40,12 @@ export function blobTooLarge(blob: Blob | undefined): boolean {
 }
 
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
+  // 🔴 無認証・無制限で世界に開いている唯一の書き込み経路。キーを固定文字列にしているのは
+  // クライアントを区別する手段（IP）を読まない方針のため＝これは【全体】の速度制限であって
+  // 特定の相手だけを絞る仕組みではない（2026-09-18、本番デプロイ直後の監査で追加）
+  const { success } = await env.ROOM_CREATE_LIMITER.limit({ key: 'room-create' })
+  if (!success) return Response.json({ error: 'rate_limited' }, { status: 429 })
+
   // 生の本文での足切りを更新側だけに置くと、作成経路から巨大な本文が入る
   const raw = await request.text()
   if (raw.length > MAX_REQUEST_BYTES) {
@@ -203,8 +211,11 @@ async function handleWebSocket(request: Request, env: Env, roomId: string): Prom
 /**
  * 検索結果に出さない。
  *
- * ⚠ 面は3つある（robots.txt / meta タグ / このヘッダ）。**robots.txt はお願いでしかなく**、
- * meta タグは HTML にしか効かない。ヘッダは API の応答にも効く。
+ * ⚠ 面は3つあるはずだが、トップページでは【2つしか立っていない】（2026-09-18の監査で実測）。
+ * `wrangler.toml` の `[assets]` が静的アセット（`/`・`/robots.txt`・`/manifest.webmanifest` 等）を
+ * Worker を迂回して配信するため、**このヘッダはトップページには掛からない**。掛かるのは
+ * Worker が処理する経路（`/api/*`・`/r/<id>`・404応答）だけ。robots.txt はお願いでしかなく、
+ * meta タグは HTML にしか効かない。ヘッダは API の応答にも効く（はずが、トップページには届かない）。
  * 根拠＝**2026-09-04 のユーザー裁定「非公開開発のみ先行可」**。本人が再裁定するまで
  * 生きている。検索結果に出ることは、この裁定そのものを壊す。
  *
