@@ -1,254 +1,290 @@
-# Michizure（道連れ）
+# Michizure
 
-旅行の費用を記録して精算まで見届けるアプリ。合言葉つきの「部屋」を作り、URL と合言葉を知っている人だけが入れる。
+**Splitting trip costs, for the trip you are actually on.**
+No accounts. Works with no signal. The server stores only ciphertext and thin metadata.
 
-設計: [`docs/superpowers/specs/2026-08-09-michizure-phase1-design.md`](docs/superpowers/specs/2026-08-09-michizure-phase1-design.md)
-実装計画: [`docs/superpowers/plans/2026-08-09-michizure-phase1a-backend.md`](docs/superpowers/plans/2026-08-09-michizure-phase1a-backend.md)
-公開前にユーザーの手でやること: [`docs/before-launch-checklist.md`](docs/before-launch-checklist.md)
+## The problem is not the arithmetic
 
-⚠ この README は**開発用（内部向け）**。提出・公開向けの文面は [`README.draft.md`](README.draft.md) が別に在り、
-そちらが**外向けの正典**。片方だけ直すと必ずズレる。
+Dividing a restaurant bill is easy. What breaks on an actual trip is everything around it:
 
-## 現在の状態
+- **Signal is worst exactly where you need to record.** Mountains, ferries, basements, abroad on
+  a bad roaming plan. You note "¥4,200, Sato paid" *then*, or you never note it.
+- **Asking five friends to sign up ends the conversation.** By the time everyone has made an
+  account, someone has given up and you are back to a group chat and a notes app.
 
-**サーバー（Phase 1a）もクライアント（Phase 1b）も実装済み。2026-09-18に初回本番デプロイ済み。残っているのは公開ゲートのみ。**
+## Demo
 
-🔴 2026-09-05 の監査まで、この行は「フロントエンドは未着手（Phase 1b）」と書いてあった。
-⚠ **書いた時点（2026-08-10・`d033a80`）では正しかった。** クライアントはその3日後
-（2026-08-13・`f646839`）に入り、**この行だけが取り残されて23日そのままだった**
-＝`src/client/` の11モジュールと `public/` の配信物が在るのに、入口は「無い」と言い続けていた。
-README はリポジトリの入口なので、**この1行だけを読んだ人は「アプリが無い」と判断する**。
-⇒ 状態の記述は**書いた時に正しくても腐る**。直すときは記憶ではなく**実物と突き合わせる**こと。
+**Video:** _link to follow._
 
-### 動くもの（コードで確認できる）
-
-- **部屋**: 作成・入室・破棄（`src/index.ts` がルーティング、`src/room.ts` が Durable Object）
-- **鍵と暗号化**: 合言葉 → 正規化 → PBKDF2 → HKDF で authKey / encKey に分岐（`src/keys.ts`）。
-  合言葉も復号鍵もサーバーへ送らない
-- **画面**: メンバー追加・記録の追加/修正/削除・割る相手の選択・支払い済みチェック・
-  立替と残高・「誰が誰にいくら払うか」（`src/client/app.ts` と `public/index.html`）
-- **ローカル優先**: 変更は**まず端末に確定**し、送信はその後ろで行う。衝突は自動マージせず
-  利用者に選ばせる（`src/client/store.ts`）
-- **リアルタイム同期**: WebSocket（Hibernation）で他の端末へ中継。書いた本人には返さない。
-  切断は異常として扱わず自動で繋ぎ直す（`src/client/live.ts`）
-- **オフラインでの再読み込み**: Service Worker（`public/sw.js`・出所は `scripts/build-sw.mjs`）。
-  ⚠ **これは 2026-09-05 に足したもの**で、それまで「電波が無くても動く」は**半分しか本当でなかった**
-  ＝入力は localStorage に残るが、**リロードするとアプリ自体が読み込めなかった**
-- **前のアプリからの取り込み**: travel-calculation の書き出しファイルを読む（`src/client/import.ts`）
-- **合言葉の生成**: 1,024語×5語 ≒ 50bit（`src/client/passphrase.ts`・`wordlist/`）
-- **CSV書き出し（ネイティブシェルのみ・課金）**: RevenueCat Capacitor SDK で一回きりの購入を1つ持つ
-  （エンタイトルメント識別子 `export`・匿名の端末帰属ID）。Web配信では何もしない
-  （`src/client/billing.ts` `csv.ts` `export-share.ts`。テストは `test/billing.test.ts` ほか）
-
-### 残っているもの
-
-- **公開ゲート4点**。正典＝`docs/before-launch-checklist.md` §C
-- **単語リストの目視確認**（同 §A-2）。機械で判定できる条件は全て通してあるが、
-  **不快語と馴染みのなさは人にしか判定できない**
-- ストア側の商品登録（App Store Connect / Google Play Console）。RevenueCat 側の設定・
-  SDK 組込自体は完了済み（`docs/before-launch-checklist.md` A-4）
-
-## 構成
-
-| 場所 | 中身 |
+| Recording an expense with the network off | The settlement view |
 |---|---|
-| `src/index.ts` `src/room.ts` `src/token.ts` | Worker と Durable Object |
-| `src/keys.ts` `src/box.ts` `src/types.ts` | **サーバーとクライアントの両方から読む**。鍵導出・暗号化・定数は1つの出所 |
-| `src/client/` | ブラウザ側。`app.ts` が画面、他は API・同期・実時間中継・精算・合言葉・取り込み |
-| `public/` | 配信物。`index.html` と `robots.txt` は手書き、`app.js` / `chunk-*.js` / `sw.js` は**生成物** |
-| `test/` | vitest（`@cloudflare/vitest-pool-workers`）。サーバーとクライアントのロジック両方 |
-| `wordlist/` | 合言葉の単語リストと採番済みレビュー表 |
+| <img src="assets/demo-offline.png" width="300" alt="Michizure room screen showing the offline indicator and two recorded expenses"> | <img src="assets/demo-settlement.png" width="300" alt="Michizure settlement view showing who pays whom"> |
 
-⚠ `public/` の JS を手で直さない。出所は `src/client/` で、**次のビルドで黙って消える**。
+_(The app's interface is in Japanese.)_
 
-## 開発
+A 75-second walkthrough on an Android phone: switch on airplane mode, add an expense while offline
+(it is saved to the device first), switch airplane mode off and watch the room return to "saved".
+Then the CSV export — gated behind the one-time purchase, shown with RevenueCat's Test Store dialog —
+followed by the exported file in the OS share sheet. Room creation is not in the video; "Run locally"
+below shows it.
 
-```
+## What this is not
+
+There are good split-billing apps. **This one does not beat them on features.** Ten existing
+services were surveyed while designing it — Walica, Splitwise, タテカリ, レコペイ, groupay, Nowa,
+Walimo, FAMI-KAN, ワリナビ, TATEKA — and every feature first considered "our differentiator"
+already shipped somewhere.
+
+So this is not a better spreadsheet. It is a **narrower tool that gives up different things.**
+
+## What we gave up, and what that bought
+
+| Given up | Bought |
+|---|---|
+| Accounts, sign-up, password reset | A room is a URL plus a passphrase. Nothing to create, nothing to lose but the passphrase |
+| The server being able to read your data | It is also **unable to help you recover it**: we cannot reset or recover a lost passphrase |
+| Reading IP addresses in our own code | Nothing in our code can tell one client from another, so nothing throttles per client. Passphrase guesses are backed off per room (which lets anyone lock a room — see Limitations); room creation has one global limit that did not enforce in production when we measured it on 2026-09-18. **This does not mean no IP is recorded anywhere** — see below |
+| A framework | **18,746 bytes gzipped** before the app is usable, and it keeps working with no network |
+| Automatic resolution of conflicting edits | When two devices change the *same expense*, you are **shown both versions and asked to choose**; until you do, this device sends nothing to the server. Edits that do not collide still merge automatically |
+
+## What the server actually holds
+
+We would rather be precise here than reassuring.
+
+- **The room's ciphertext and its IV.** Encryption and decryption happen in your browser; the key
+  is derived from the passphrase and never sent.
+- **Plaintext metadata:** room ID, the time of the last successful entry (creation counts; there is
+  no separate creation time), the KDF salt, a hash of the auth key, the KDF parameters, and small
+  version numbers including a write counter (`rev`). Room size and how often it changes are
+  therefore visible.
+- **Material for offline guessing.** The salt and KDF parameters are served without authentication
+  (a client needs them before it can derive a key), and together with the auth-key hash they are
+  what someone holding the storage would need to test passphrase guesses offline. That is why the
+  passphrase is generated by default and why its strength matters.
+- **A per-room record of failed entry attempts** — a count, a wall-clock timestamp of the last
+  failure, and when the room is unblocked. Every room that has ever been entered carries it.
+- **Application logs are off** — `[observability] enabled = false`, enforced by a check that runs
+  before `npm test`.
+- **Our code never reads any IP header** (`CF-Connecting-IP` and friends), also enforced by that check.
+- **But the platform does.** Cloudflare retains request data including IP addresses — Security
+  Events for 24 hours and Security Analytics for 7 days on the free plan, plus its own edge logs
+  for a period Cloudflare does not publish. We cannot switch this off, and we will not imply we have.
+
+**On your device, the room's contents and its decryption key are stored in plaintext** so the app
+works offline and can reopen the room without asking for the passphrase. The passphrase is still
+asked for to resume syncing once the 30-day connection token has expired, and before a room is
+deleted. That is a deliberate trade for usability; it is also the largest hole in the design. See
+Limitations.
+
+## Design choices, and why
+
+**Local-first, not offline-as-a-feature.** Every change commits to the device *first*; the network
+is attempted afterwards. Reversing that order is the difference between "the app is slow on bad
+signal" and "the entry you typed is gone after a reload".
+
+**The app itself is cached, not just the data.** A service worker stores the shell, so reloading —
+or reopening the browser — works with no network at all. Without it "works with no signal" would be
+only half true: your records would survive, but the app would not load to show them. It installs
+after the first online load, and only in the web build; the native shell bundles its assets instead.
+
+**Same-record conflicts are surfaced, not guessed at.** Two people editing offline is normal on a
+trip, and most of it never collides: expenses added on each side merge automatically, with a
+one-line notice. Only when both devices changed the *same* expense does the app show both versions
+of that record and ask you to pick one; the one you don't pick is discarded. Until you choose, this
+device keeps saving locally but sends nothing to the server, so the other side's version cannot be
+overwritten while the question is open. The reasoning is that silently overwriting someone's
+evening of receipts is worse than asking. One limit: the trip name, dates and member names are
+simpler — if both sides changed one, this device's value wins without asking.
+
+**The passphrase is generated by default.** Five words from a 1,024-word list (~50 bits). Doubling
+the KDF iteration count buys 1 bit; adding one word buys 10. Strength has to come from the
+passphrase, so the app generates one for you. You may type your own instead, and that path is
+weaker by construction — it is gated by an entropy estimate with a floor of 40 bits, measured on the
+normalized string that actually becomes the key rather than on the raw input. That floor is a check
+in the shipped client only (the server never sees the passphrase), and the estimate is a heuristic,
+not a proof of guessing resistance.
+
+**The passphrase is normalized before it becomes a key.** Japanese voicing marks have several
+encodings that look identical on screen. Without normalization the same passphrase typed on two
+devices derives two different keys — a failure whose symptom ("wrong passphrase") points nowhere
+near its cause. The normalization is four ordered steps and the order is part of the contract.
+
+**Key-derivation parameters are stored per room.** Iteration count and normalization version live
+with the room, so changing the defaults later cannot lock anyone out of a room created today. This
+is not hypothetical: an audit found a missing normalization step on 2026-09-05, and the fix shipped
+as a new KDF version rather than a change to version 1, because we could not rule out a room
+already existing under it, and editing version 1 in place would have made any such room unopenable.
+
+**Money is divided in whole yen, and the remainder is assigned, not rounded away.** ¥100 between
+three people is 34/33/33, not three rounded 33.33s that fail to add up. Which participant carries
+the extra yen is derived from the expense's own ID, so it varies between expenses and is identical
+on every device.
+
+**The API origin is read from a `<meta>` tag, not baked in at build time.** You can open the shipped
+artifact and see where it talks to. A build-time constant would be invisible.
+
+## Monetization
+
+**RevenueCat is integrated**, in the native (Capacitor) shell only — the web build does nothing
+with it. It powers a single one-time purchase, gating a CSV export of the room's expenses and
+settlement. Configuration, purchase, and restore live in `src/client/billing.ts`; the exported
+file itself is built in `src/client/csv.ts` and handed to the OS share sheet by
+`src/client/export-share.ts`.
+
+**In this submission the purchase runs against RevenueCat's Test Store**, as the demo video shows;
+the app is not released to any store, so no real-money purchase is possible yet. The RevenueCat
+public keys are not in the repository (the `michizure-revenuecat-*-key` meta tags are empty until the
+shell is built with `MICHIZURE_REVENUECAT_IOS_KEY` / `MICHIZURE_REVENUECAT_ANDROID_KEY`), so a shell
+built from a fresh clone cannot complete a purchase.
+
+The hard part is not checkout. It is that **this app has no accounts**, so there is no user to
+attach an entitlement to. Three options exist, and each costs something real:
+
+- **Attach to the room** — the server would have to store "this room is paid", which adds a field
+  to what the server retains and moves the ground under the privacy policy.
+- **Introduce accounts** — undoes the premise of the product.
+- **Attach to the device** (chosen) — keeps the server ignorant, at the cost of purchases not
+  following you to a new device on their own (a Restore button asks RevenueCat and the store to
+  re-link them to the same App Store / Google Play account) and not following a shared room.
+
+Because *our* server must stay ignorant of payment (in the native shell the RevenueCat SDK talks to
+RevenueCat directly), **paid features are constrained to things
+decidable entirely on the device**: export, local summaries, presentation. Anything requiring the
+server to behave differently for a paying user is excluded by construction, not by preference.
+
+The part worth building carefully is **entitlement while offline**: an app designed to work with no
+signal must decide what a paying user sees when RevenueCat cannot be reached.
+
+## Measured numbers
+
+Measured with `gzip -9` (each file separately) after `npm run build:client`, at commit `f14caad`. **Every measured row carries its own measurement date**; the last two rows are constants read from `src/types.ts` at that commit, not measurements. The first-load figure has been quoted as 9,441, 10,864, 11,402, 11,493, 17,893, 18,454 and now 18,746 B. **Only the first move (9,441 → 10,864 B) was a measurement correction**; every later move followed real code. The last two: +561 B was the MIT redistribution banner (+657 B) net of −96 B from everything else, and +292 B (all in `app.js`) is the pending-conflict sync fix. The RevenueCat SDK itself stays lazy-loaded and is confirmed absent from the static chunks (re-checked 2026-09-19 against esbuild's metafile; `build:client` deletes `.build-meta.json` at the end, so re-run the esbuild step alone to regenerate it). A measured number without a date in this table is a bug.
+
+"Before the app is usable" is `index.html` plus `app.js` plus every chunk reachable from `app.js` through static `import` statements; every other chunk is lazy.
+
+| | |
+|---|---|
+| **Before the app is usable** (2026-09-19) | **18,746 B** — HTML 4,591 + app 10,933 + three shared chunks (913 + 1,360 + 949) |
+| Fetched only when creating a room (2026-09-19) | 4,789 B (word list + passphrase generation) |
+| Fetched only when importing old data (2026-09-19) | 1,173 B |
+| Service worker (does not block first paint, 2026-09-19) | 1,118 B |
+| Every asset the app can ever fetch (2026-09-19) | 48,634 B — see note below |
+| Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
+| Tests (run 2026-09-19) | **302** (25 files) |
+| Room auto-deletion | 365 days after the last successful passphrase entry (creation counts); writing does not extend it |
+| Ciphertext ceiling enforced by the server | 256 KiB |
+
+The KDF timing is **one device**. It is fast enough that no per-device tuning was needed, but it is
+not a claim about phones in general.
+
+**Note on "every asset the app can ever fetch":** as of 2026-09-19 this is defined as `index.html`
++ all 17 JavaScript files (`app.js` and 16 chunks) + `sw.js`, each gzipped separately and summed;
+icons, the web manifest and `robots.txt` are not counted. Of the 48,634 B, **2,826 B is the MIT
+redistribution banner** that every JavaScript file now carries (about 166 B each; without it the same
+files total 45,808 B). Earlier figures of this row cannot be compared with today's. The 2026-09-06
+figure (18,263 B) recorded no definition. The 2026-09-17 figure (46,974 B) was recorded as
+`index.html` + `app.js` + 13 chunks + `sw.js`, but today's build has 16 chunks, and 46,974 B is
+*higher* than today's banner-free total although the static files, banner aside, grew by only about
+200 B in between.
+That gap is unexplained, so **neither figure must be read as a like-for-like trend**. Only the
+2026-09-19 figure has a definition that matches the build it was measured on.
+
+## Run locally
+
+Requires Node 22 or newer (`wrangler` refuses to start on anything older; developed and verified on
+Node 24), a POSIX shell (`build:client` runs `rm -f`), and a Cloudflare Workers toolchain (`wrangler`,
+installed as a dev dependency).
+
+```bash
 npm install
-npm test               # 全テスト。pretest で privacy 設定と単語リストも検査される
-npm run typecheck      # wrangler types → サーバー(tsconfig.json) → クライアント(tsconfig.client.json)
-npm run dev            # クライアントをビルドしてからローカル起動（http://localhost:8787）
-npm run build:client   # src/client → public/（app.js・chunk-*.js・sw.js を作り直す）
-npm run build:wordlist # wordlist/rejected.txt を反映して単語リストを作り直す
+npm run dev      # builds the client bundle, then starts wrangler dev
 ```
 
-🔴 **「緑」は「テストが実際に走った」ことまで見る。** `pretest`（privacy 検査と単語リスト検査）が
-落ちると **vitest は起動しない**。この時、前回のテスト数を記憶で持ち回ると「N件パス」だけが
-生き残る（2026-09-05 に実際に起きた）。⇒ 出力に `Tests  N passed` の行が**その回に出ていること**を目で確かめる。
+`npm run dev` prints the local URL. Open it and create a room; from then on that room works with no
+server — stop it, reload, and you can still open the room and record expenses. Creating a room, or
+joining one without a QR entry ticket, still needs the server.
 
-⚠ `npm run build:wordlist` は**穴埋め**で置き換える＝**1語落とせば1語だけ入れ替わり、他の語は動かない**
-（落とした語の位置に一番近い予備が入る）。以前は不採用語をプール段階で落としていたため選抜が引き直され、
-**1語（「たいほ」）落としただけで254語が入れ替わっていた**（2026-09-05 実測・同日に修正）。
-それでは人手のレビューが成立しない＝**見て通した語が消え、見ていない語が入る**。
-
-ローカルサーバーを起動してから、ブラウザがやることを一通り叩く通し確認:
-
-```
-node scripts/e2e-local.mjs
+```bash
+npm test         # rebuilds the client, runs eight consistency checks (privacy config, word list,
+                 # icons, public surface, stored fields, privacy-policy rows and quotes, license
+                 # banner), then the 302 tests
+npx vitest run   # the tests alone
+npm run typecheck
+npm run build:wordlist   # regenerates the word list, its bundled copy and wordlist/review.md
 ```
 
-## API
+`npm test` works on a fresh clone of the published files: it builds the client itself, and the two
+checks that read privacy-policy and terms drafts (`check-pp-rows`, `check-pp-ui-quotes`) print that
+they are skipped when those unpublished drafts are absent, rather than failing. It rebuilds `public/`
+for **web** delivery (empty API origin) — if you build the native shell, use `npm run build:shell`,
+not `npm test` followed by `npx cap sync`, or the shell inherits that empty origin. `npm test` also
+runs before `npm run deploy` (via `predeploy`). `npm run test:watch`, `npx vitest run` and a direct
+`wrangler deploy` bypass the checks, and there is no CI, so the checks gate only `npm test` and
+`npm run deploy`.
 
-| メソッド | パス | 認証 | 用途 |
-|---|---|---|---|
-| GET | `/api/health` | なし | 死活確認 |
-| POST | `/api/rooms` | なし | 部屋を作る（`{salt, authKey, iterations, kdfVersion, blob}`）|
-| GET | `/api/rooms/:id/salt` | なし | 鍵導出に要る `{salt, iterations, kdfVersion}`。秘密ではない |
-| POST | `/api/rooms/:id/enter` | `authKey` | 入室してトークンを得る |
-| GET/PUT | `/api/rooms/:id/blob` | Bearer | 暗号文の取得・更新 |
-| GET | `/api/rooms/:id/ws?token=&client=` | トークン | WebSocket で中継を受ける（`Upgrade: websocket` 必須）|
-| DELETE | `/api/rooms/:id` | `authKey` | 部屋ごと破棄する |
-| GET | `/r/:id` | なし | **利用者が共有する URL**。Worker が明示的に画面（`/`）を返す |
-| GET | それ以外 | なし | `public/` の静的配信（`[assets]`）。一致しなければ Worker へ来る |
+The token-signing secret lives in `.dev.vars` and is a **development value only**, checked into the
+repository on purpose so `npm run dev` and `npm test` work on a fresh clone without setup. A
+deployment sets the real one with
+`wrangler secret put TOKEN_SECRET`; it must never be added to `wrangler.toml`, because a `[vars]`
+entry **replaces** the deployed secret.
 
-⚠ `client=` を落とすと**書いた本人にも中継し返す**。⚠ `/r/:id` で 404 を返すと、
-リンクを受け取った人が開いても何も出ない（アセットに一致しないパスは Worker へ来るため、明示的に返している）。
+## Limitations
 
-## 配信物の大きさ
+- **A lost passphrase means we cannot recover the room for you.** No new device can join, and a
+  device that has already opened the room stops syncing once its 30-day connection token lapses (it
+  keeps a readable local copy — see the device bullet below). The server's copy is deleted 365 days
+  after the last passphrase entry. This is structural, not a missing feature.
+- **Anyone with the URL and the passphrase can read everything in that room.** Send them through
+  different channels; both in one message means one leak opens the room.
+- **There is no way to remove a member or change a room's passphrase**, and anyone who holds the
+  passphrase can delete the room for everyone. Access tokens are stateless and last 30 days, so there
+  is no per-token revocation either.
+- **On a device where the room has been opened, no passphrase is needed to read it again.** The
+  contents and the decryption key are held in that browser's local storage, so a shared or stolen
+  device exposes the room. Records you delete or edit also linger in plaintext in the sync base until
+  the next successful sync, and the exported CSV is written unencrypted to the app's cache
+  directory and left there for the OS to reclaim. Delete the room from the device to clear the
+  stored copy.
+- **Local-first durability is best-effort.** The app does not ask the browser for persistent
+  storage, and a failed write to local storage (full or disabled) is not handled specially.
+- **This encryption is not verifiable by you.** We serve the JavaScript that does the encrypting.
+  We design it so we cannot read your data, and we will not claim more than that.
+- **Metadata is not encrypted** — see "What the server actually holds".
+- **The connection indicator does not probe reachability.** It now flips the moment the device
+  loses its network interface — airplane mode, for instance — but a connection that is up but going
+  nowhere is only noticed when the socket itself fails. Your data is not affected either way — it is
+  saved to the device first, regardless of what the indicator says.
+- **After a page reload or an app restart, an open conflict question gets coarser.** Which records
+  collided is remembered only in memory, so the per-record question is replaced by a choice between
+  the two whole copies ("this device: N people, M records" or "the other device"); the one you don't
+  pick is discarded, and choosing this device drops whatever the other side added after the conflict
+  was detected. Nothing is sent to the server before you choose, either way. The marker that a
+  question is open is kept in the device's local storage, so it also holds across tabs of the same
+  origin.
+- **Anyone who knows a room's URL can temporarily lock it** by failing the passphrase. Backoff
+  starts at the 5th failure (1 minute) and doubles to at most 1 hour, clearing after 24 hours
+  without failures. Because our code cannot tell clients apart, the block lands on the room rather
+  than on whoever caused it. While a room is locked, entering it — and deleting it — is refused;
+  devices that already hold an unexpired token keep syncing.
+- **Room creation is unauthenticated, and its rate limit is weak.** `handleCreateRoom` consults one
+  Workers Rate Limiting binding (20 requests per 60 s, a single key shared by all callers because our
+  code does not read IP addresses). Cloudflare documents that binding as permissive and eventually
+  consistent, not meant for exact counting, and in a production test on 2026-09-18 about 195
+  consecutive requests never received a 429. Treat it as a speed bump, not a limit. The realistic
+  cost is junk ciphertext (up to 256 KiB per room, kept until the 365-day auto-delete) and free-tier
+  consumption. We plan to replace it with a Durable Object counter after submission.
+- **The 20-member cap is a client-side check, and not a complete one.** Only the "add member" button
+  applies it. Importing an old file and merging two devices' offline edits do not re-check it, so a
+  room can end up with more than 20 members. The server cannot check it either: the member list is
+  inside the ciphertext, and the only server-side bound is the 256 KiB ciphertext size limit.
 
-**構造**（ビルドが変わっても変わらないのはここだけ）:
+## 日本語（要約）
 
-- **最初の読み込み** ＝ `index.html` + `app.js` + **静的 import のチャンク**
-- **遅延** ＝ 単語リスト＋合言葉（部屋を作る時だけ）／取り込み／`api.ts` の一部（破棄・受信の復号）
-- `sw.js` は読み込みを妨げない
+旅先で使う前提の割り勘アプリです。**アカウントを作らず**、合言葉つきの部屋を URL で共有します。
+**電波が無くても動き**（アプリ本体も端末に保存されるので、圏外のまま開き直せます）、
+入力はまず端末に確定してから通信します。サーバーが持つのは暗号文と、部屋ID・時刻・
+入室失敗の記録などの平文のメタデータだけです。
 
-🔴 **静的チャンクを数え落とさないこと。** 2026-09-05 より前に出回っていた「9,441 B」は
-`index.html + app.js` しか数えず、**チャンクが全部遅延だと思い込んでいた**値で、誤りである。
-静的か遅延かは成果物を見れば分かる:
-
-```
-grep -o 'from"\./chunk-[^"]*"' public/app.js       # 静的＝最初の読み込みに入る
-grep -o 'import("\./chunk-[^"]*")' public/app.js   # 遅延
-grep -o 'from"\./chunk-[^"]*"' public/chunk-*.js   # チャンク間の共有（下の🔴の機構が見える）
-for f in public/index.html public/*.js; do printf '%-28s %s\n' "$f" "$(gzip -9c "$f" | wc -c)"; done
-```
-
-**実測（2026-09-05 23:07 のビルド・`gzip -9`）**: 最初の読み込み **11,402 B**
-＝ `index.html` 3,416 + `app.js` 6,308 + 静的チャンク2本（908 + 770）。
-遅延＝単語リスト 4,600 / 取り込み 1,021 / `api.ts` の一部 193。`sw.js` 955。
-
-⚠ **数字を持ち回らない。** 同じ 2026-09-05 の夜、監査の修正（`b402b3c`）が入っただけで
-最初の読み込みは **10,933 B から上の値へ変わり、静的チャンクの分かれ方まで変わった**。
-チャンクの名前は内容ハッシュなので毎回変わる。**外へ出す数字は出す直前に測り直すこと。**
-
-⚠ その 10,933 B 自体も途中の値である（Service Worker を足した後・`b402b3c` の前）。
-`README.draft.md` はもう1つ前の 10,864 B（SW を足す前）を挙げている＝**同じ夜に3つの値が回った**。
-**どれもその時のビルドでは正しい。** ⇒ 数字を引用する時は**どのビルドの値か**を必ず添える。
-
-**実測（2026-09-17・`npm run build:client`・env変数無し＝Web配信の既定状態・`gzip -9`）**:
-最初の読み込み **17,893 B** ＝ `index.html` 4,628 + `app.js` 10,488 + 静的チャンク3本
-（`chunk-YADTLQU5.js` 795 + `chunk-4D5IIWLV.js` 1,213 + `chunk-5OAXSQZT.js` 769）。
-9/5比で app.js が大きく増えたのは、その後に入った CSV 書き出し・課金導線（`billing.ts` 等）の
-呼び出し側コードが理由（SDK 本体は変わらず遅延のまま）。RevenueCat は静的チャンクに現れていない
-ことを確認済み（現れていれば数百 KB 単位で跳ねるはずが、静的3本の合計は3KB弱）。
-
-**同じビルドで残りの行も測り直した**（統合ハブ指摘＝「Re-measure every number」は初回読み込みだけでは充足しない）。
-チャンク→ソースの対応は `.build-meta.json`（esbuildのメタファイル。生成コマンド:
-`npx esbuild src/client/app.ts --bundle --splitting --format=esm --charset=utf8 --minify --outdir=public --entry-names=app '--chunk-names=chunk-[hash]' --metafile=.build-meta.json`。
-⚠ zshで直接打つと `[hash]` がグロブ展開されるので、この引数はクォート必須。`npm run build:client` 経由なら問題ない）
-で確認した。案内する import グラフを辿り、既に初回読み込みに入っている共有チャンクは二重に数えていない:
-
-- 部屋作成時のみ（単語リスト＋合言葉生成・`wordlist-data.ts`+`passphrase.ts`＝`chunk-M6SSLZ3J.js`）: **4,599 B**（9/6比ほぼ変化なし）
-- 取り込み時のみ（`import.ts`＝`chunk-UKA2UTKE.js`）: **1,021 B**（9/6と完全一致＝未変更）
-- Service Worker（`sw.js`）: **1,125 B**（9/6の956 Bから増加）
-- 配信し得る全アセット（`index.html`+`app.js`+チャンク13本+`sw.js`の合計）: **46,974 B**
-  （9/6の18,263 Bから大幅増。QRコード機能のチャンク`chunk-ASNWZWQJ.js`が7,825 Bと大きく、
-  9/6時点でこの数え方に含めていたか未確認＝**この差分の内訳は未調査**。次に触る人は
-  9/6版の生の内訳（残っていれば）と突き合わせること）
-- テスト数（`npm test` 実走・2026-09-17 23:00）: **291件**（25ファイル）＝9/6版「137」から増加
-  （その後に入った機能とテストの分だけ増えたと見るのが自然。`before-launch-checklist.md`
-  A-4 の「テスト291件」という別記述と一致＝独立した裏取りになっている）
-添えないと、後から見た人には「2つの文書が矛盾している」としか見えない。
-
-🔴 **形が変わった原因は精算の丸め修正ではない**（この節は最初そう書いていた。同じ 2026-09-05 に訂正）。
-原因は**合言葉の強度判定が `normalizePassphrase` を呼ぶようになった**こと＝`src/client/passphrase.ts` が
-`src/keys.ts` を読み始めた。これで `keys.ts` は「最初に読む側」と「遅延する単語リスト側」の
-**両方から使われる共有コード**になり、`--splitting` がそれを独立したチャンクへ切り出した。
-⇒ **遅延モジュールに import を1本足すと、最初に読む物の形が変わる。**
-単語リストのチャンクが別のチャンクを `from` で読んでいれば、それが切り出された共有部分である
-（上の3本目の grep で見える）。**「何を直したか」から「何が増えたか」を推測しない。**
-
-## デプロイ
-
-⚠ **公開はリタス初版公開後**（設計 §1）。**2026-09-18 に初回本番デプロイ済み**
-（`https://michizure.y2studyabout.workers.dev`・`docs/before-launch-checklist.md` B-3 チェック済み）。
-
-デプロイ済みかどうかは、Cloudflare の操作をこのリポジトリから直接見ることはできないが、
-**認証なしの curl で確認できる**：`curl -s -o /dev/null -w '%{http_code}' https://michizure.y2studyabout.workers.dev/api/health`
-が 200 を返せば稼働中（実測手段は `wrangler deployments list` も同様に使える）。
-＝下の kdfVersion 1 を消してよいかの判断は、この「デプロイ済みか」ではなく
-**「本番に kdfVersion 1 の部屋が存在するか」**に変わった（既定値は2なので窓は細いが残っている）。
-
-**公開ゲートは4点**（①リタス初版の公開＝**2026-09-10 に充足を実測** ②個人情報保護法の残論点を踏まえた規約類 ③IPログ保持方針
-④ユーザーの公開承認）で、**判断はどれもこのリポジトリの外**で決まる。正典＝`docs/before-launch-checklist.md` §C。
-（2026-09-05 の監査まで、ここは「4つのうち3つは外」と書きながら4つ並べていた）
-
-```
-wrangler secret put TOKEN_SECRET
-npm run deploy   # クライアントのビルドも一緒に走る
-```
-
-🔴 **`wrangler.toml` に `TOKEN_SECRET` を書いてはいけない。** `[vars]` の値は deploy 時に
-**同名のリモートシークレットを置き換える**ので、上の `secret put` の後に deploy すると
-**本番が開発用の値に戻り、誰でもアクセストークンを偽造できる**（wrangler 4.120.0 の
-`checkRemoteSecretsOverride` で確認・2026-09-05）。
-
-開発・テスト用の値は `.dev.vars`（**意図的に git 追跡している**＝無いとクローンした人の
-`npm test` / `npm run dev` が動かない。値が公開の既定値だから置ける）。
-
-⚠ **2026-09-05 の監査まで、この節は逆のこと**（「`wrangler.toml` の `[vars]` は開発用」）**を書いていて、
-リポジトリも実際にその形をしていた。** 検査は `npm test` の pretest が**両方の面**で持つ＝
-`wrangler.toml` に書くと落ち、`.dev.vars` の値を既定から変えても落ちる。
-
-⚠ `[vars]` の値は `wrangler types` の生成物（`worker-configuration.d.ts`）にもそのまま埋め込まれる。
-だからあのファイルは追跡しない（`npm run typecheck` が毎回作り直す）。
-
-## PBKDF2 の反復回数
-
-`src/keys.ts` の `PBKDF2_ITERATIONS` ＝ **600,000**。**入室のたびに1回だけ、利用者の端末のブラウザで走る。**
-
-✅ **2026-08-14 に実機で測り、据え置きで確定済み**（Android 実機 / Chrome 151 で 600,000回=70ms、
-1,000,000回でも 116ms）。正典＝`docs/passphrase-strength.md`。**再litigate不要。**
-
-⚠ **Mac の数値から一般化しない。**「ブラウザは Node の2.4倍遅い」は Mac だけの性質で、
-2026-08-14 に実機で否定された（実機の 70ms は Mac の Node の 73ms より速い）。
-「一番遅い端末が体験を決める」原則は生きているので、**測り直すなら実機で測る**。
-
-```
-node scripts/bench-pbkdf2.mjs   # Mac / Node の値。判断には使わない
-```
-
-実機の値は `bench/pbkdf2.html` を端末で開いて測る。
-
-⚠ このページは端末にダウンロードして直接開く（`file://`）か `https://` で開くこと。Mac で簡易サーバーを立てて
-`http://192.168.x.x:8000/` のように LAN の IP で開くと、安全なコンテキストにならず `crypto.subtle` が使えない。
-
-⚠ 値を変えても**既に作った部屋は壊れない**（反復回数は部屋ごとに保存している）。
-
-## 既知の限界（塞いでいない・承知のうえ）
-
-- **部屋の作成にレート制限が無い。** 無認証で部屋を作れるので、大量作成でストレージを埋められる。
-  コード側で防ぐには状態か IP が要り、IP は読まない方針なので**Cloudflare 側のレート制限で対処する**（公開時にユーザーが設定）
-- **合言葉を外し続ければ、その部屋を締め出せる。** URL を知っている人なら誰でもできる。
-  クライアントを区別するには IP が要るが読まない方針なので、**「IPを読まない」の代償として受け入れている**。
-  失敗回数は24時間で減衰するので、打ち間違いが恒久的に効くことはない
-- **WebSocket は接続後にトークンを再検証しない。** 接続中はトークンの期限切れ後も更新を送れる
-
-## 設計上の注意
-
-- サーバーは**暗号文とメタデータのみ**を保持する。合言葉も復号鍵も持たない
-- ⚠ ただし**この暗号化を利用者は検証できない**（配信している JavaScript は運営者のもの）。
-  「運営者にも中身が見えない」等を対外的に謳ってはならない。設計 §7.5 を必ず読むこと
-- **メタデータは暗号化されない**（部屋の存在・時刻・暗号文のサイズ・更新頻度・IPアドレス）。
-  「何も持たない」ではなく「暗号文とメタデータを持つ」である
-- 合言葉の正規化は**鍵導出の契約の一部**で、規則の版を `kdfVersion` として部屋ごとに保存する。
-  現行は **2**（NFKC → カタカナ→ひらがな → 区切り除去 → **NFC**）。
-  🔴 **1 は欠陥版**（最後の NFC が無く、単体の濁点で打たれた合言葉から違う鍵が出る）だが、
-  **既に 1 で作られた部屋があれば二度と開けなくなる**ので残してある。
-  **2026-09-18 に本番デプロイ済みなので、この条件はもう成立しない。** 消してよい条件は
-  「本番に kdfVersion 1 の部屋が一つも存在しないことを人間が確認できたら」に変わった
-  （既定値は2なので窓は細いが残っている・`src/types.ts` の該当コメント）
-- メンバー20人上限は**クライアント側でのみ強制**される。サーバーは検証できない
-- 合言葉を紛失するとデータは復旧できない
-- Workers Logs は `wrangler.toml` で明示的に無効化している。**新規 Worker では既定で有効**なので、
-  この設定を消すとログが Cloudflare 側に残る（無料プランで3日）。`npm test` の pretest が検知する
+機能で既存サービスに勝つものではありません。**捨てたものと引き換えに得たもの**で作られています。
+合言葉を失うとデータは戻りません。**一度開いた端末では合言葉なしで中身が読めます**（オフラインで
+使うための代償です）。IP アドレスはアプリでは読みませんが**基盤側（Cloudflare）には残ります**。
+詳しくは上の「What the server actually holds」と Limitations を読んでください。
