@@ -10,7 +10,7 @@ Michizure は第三者の著作物を**再配布する**。ここはその義務
 > 🔴 **2026-09-05 の監査で発見**：この表示は**同日まで存在しなかった**。
 > リポジトリのどこにも MIT の許諾文（`Permission is hereby granted...`）が無く、
 > MIT に触れていたのは `wordlist/source/PROVENANCE.md`・`docs/passphrase-wordlist.md`・
-> `README.draft.md` の散文だけだった。
+> 当時の README 下書き（のち `README.md` へ差し替え）の散文だけだった。
 > ⚠ 「ライセンスを確認した」と「表示を運んだ」は別の作業である。前者だけを済ませて
 > 後者を落としたのが今回の抜け＝MIT の**唯一の条件**は「確認」ではなく「同梱」の側にある。
 >
