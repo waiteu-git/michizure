@@ -14,7 +14,7 @@ Dividing a restaurant bill is easy. What breaks on an actual trip is everything 
 
 ## Demo
 
-**Video:** _link to follow._
+**Video:** https://www.youtube.com/watch?v=yQ7BZZjT9HA
 
 | Recording an expense with the network off | The settlement view |
 |---|---|
