@@ -39,6 +39,9 @@ android/app/build/
 android/.gradle/
 android/local.properties
 android/capacitor-cordova-android-plugins/
+# debugビルド限定の開発設定（実機での npx wrangler dev 自己署名証明書検証用）。
+# releaseビルドには影響しないが、`git add -A` で誤って公開履歴へ入る経路を塞ぐ。
+android/app/src/debug/
 
 # esbuild の構成表。build-sw.mjs が先読み一覧を決めるのに使う一時ファイル
 .build-meta.json
