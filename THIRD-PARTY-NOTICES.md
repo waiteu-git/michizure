@@ -64,14 +64,20 @@ iOS 側の SPM 依存（`Package.resolved` に記録・RevenueCat 5.88.0 ほか�
 | 取得元 | `npx cap add ios` / `npx cap add android`（Capacitor CLI・`@capacitor/ios` `@capacitor/android` 由来のテンプレート） |
 | ライセンス | **MIT**（Capacitor 本体・Ionic（旧 Drifty Co.）が公開する OSS プロジェクトのテンプレート） |
 | 原本の所在 | `android/app/src/main/java/dev/waiteu/michizure/MainActivity.java`・`android/app/src/androidTest/**`・`android/app/src/test/**`・
-  `android/build.gradle`・`android/app/build.gradle`・`android/variables.gradle`・アイコン/スプラッシュのプレースホルダ画像群（`android/app/src/main/res/mipmap-*/**`・`drawable*/**`）・
-  `ios/App/App/AppDelegate.swift`・`ios/App/App/SceneDelegate.swift`・`ios/App/App/Base.lproj/**`・`ios/App/App/Assets.xcassets/**`（いずれも生成後ほぼ無改変） |
+  `android/build.gradle`・`android/app/build.gradle`・`android/variables.gradle`・
+  `ios/App/App/AppDelegate.swift`・`ios/App/App/SceneDelegate.swift`・`ios/App/App/Base.lproj/**`・`ios/App/App/Assets.xcassets/**/Contents.json`（いずれも生成後ほぼ無改変） |
 | 配信物 | ネイティブアプリのビルド成果物（iOS/Android バイナリ）に組み込まれる。Web 配信（`public/`）には含まれない |
 
 ⚠ これらのファイル自体には個別の著作権ヘッダが付いていない（テンプレート生成時点の慣習）。
 再配布の根拠は Capacitor 本体（ionic-team/capacitor 等）が MIT で公開しているプロジェクトテンプレートに
-由来すること。アイコン・スプラッシュ画像はストア提出前に自前のものへ差し替える予定＝差し替え後は
-この項目からアイコン類を外すこと。
+由来すること。
+
+🔴 **アイコン・スプラッシュ画像は、2026-09-25 まで Capacitor の雛形（白地に水色のグリッドと青い×印）が
+そのまま入っていた。** コードのライセンス（MIT）はロゴを含まないので、雛形の同梱物を製品の顔に流用してはいけない。
+同日、`public/icons/michizure.svg`（自前の意匠・commit `fef4ef7`）から `scripts/build-native-assets.mjs` が
+全サイズを描き起こす形に置き換え、上の表から外した。雛形のバイト列は `scripts/check-icons.mjs` が
+sha256 で見張っている（`npm test` の前段）。⚠ `npx cap add` を再実行すると雛形へ戻る＝その後は
+`npm run build:native-assets` を必ず走らせる（`npm run build:shell` は自動で走らせる）。
 
 ⚠ **これとは別に、`@capacitor/core` の JS ランタイム本体は Web 配信にも含まれる。**
 `src/client/` がプラグイン呼び出し（Filesystem・Share）に使っており、esbuild が

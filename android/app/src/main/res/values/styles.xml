@@ -18,5 +18,8 @@
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
+        <!-- Android 12+ の起動画面はこの背景色の上にアプリのアイコンを出す。既定のままだと白地になり、
+             暗いアプリ画面へ入る前に白く光る。アイコンの地と同じ色にそろえる -->
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
     </style>
 </resources>
