@@ -30,8 +30,24 @@ export interface TakeResult {
   retryAfterMs: number
 }
 
+/** 保存値が使える形か。⚠ 壊れた値（NaN・欠け・負・容量超え）で続けると、止まりっぱなし（Retry-After: NaN）になる */
+function usable(b: unknown): b is Bucket {
+  if (typeof b !== 'object' || b === null) return false
+  const { tokens, updatedAt } = b as Record<string, unknown>
+  return (
+    typeof tokens === 'number' &&
+    typeof updatedAt === 'number' &&
+    Number.isFinite(tokens) &&
+    Number.isFinite(updatedAt) &&
+    tokens >= 0 &&
+    tokens <= CREATE_LIMIT.capacity
+  )
+}
+
 export function consume(prev: Bucket | undefined, now: number): TakeResult & { state: Bucket } {
-  if (!prev) return { ok: true, retryAfterMs: 0, state: { tokens: CREATE_LIMIT.capacity - 1, updatedAt: now } }
+  // 無い・壊れている時は新しいバケット（容量ぶん）として扱う。壊れた状態で永久に止めるより、
+  // 1回だけ容量ぶん通す方が害が小さい（壊れる経路はコードの不具合しか無い）
+  if (!usable(prev)) return { ok: true, retryAfterMs: 0, state: { tokens: CREATE_LIMIT.capacity - 1, updatedAt: now } }
   // ⚠ 時計が巻き戻っても、戻った分だけ余計に通さない（経過は 0・更新時刻は戻さない）
   const elapsed = Math.max(0, now - prev.updatedAt)
   const updatedAt = Math.max(prev.updatedAt, now)
@@ -49,7 +65,9 @@ export class CreateLimiter extends DurableObject {
   take(): TakeResult {
     const kv = this.ctx.storage.kv
     const r = consume(kv.get<Bucket>('bucket'), Date.now())
-    kv.put('bucket', r.state)
+    // 止めた時は書かない: 回復は古い updatedAt からの線形計算なので、書かなくても結果は同じ。
+    // 書くと、洪水（止められ続ける呼び出し）が Durable Object の書き込み回数の上限（無料枠）を食う
+    if (r.ok) kv.put('bucket', r.state)
     return { ok: r.ok, retryAfterMs: r.retryAfterMs }
   }
 }

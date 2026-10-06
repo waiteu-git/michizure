@@ -51,6 +51,28 @@ describe('consume（トークンバケットの純粋関数）', () => {
     expect(passed).toBe(CAP)
   })
 
+  it('壊れた保存値（NaN・欠け・負・型違い）でも、永久に止まらず新しいバケットとして扱う', () => {
+    const bad = [
+      { tokens: Number.NaN, updatedAt: 1_000 },
+      { tokens: 5, updatedAt: Number.NaN },
+      { tokens: -3, updatedAt: 1_000 },
+      { tokens: Number.POSITIVE_INFINITY, updatedAt: 1_000 },
+      { tokens: CAP + 50, updatedAt: 1_000 },
+      { tokens: '5', updatedAt: 1_000 },
+      { updatedAt: 1_000 },
+      {},
+      null,
+      'x',
+    ] as unknown[]
+    for (const b of bad) {
+      const r = consume(b as never, 2_000)
+      expect(r.ok, JSON.stringify(b)).toBe(true)
+      expect(Number.isFinite(r.state.tokens)).toBe(true)
+      expect(r.state.tokens).toBeLessThanOrEqual(CAP)
+      expect(r.state.tokens).toBeGreaterThanOrEqual(0)
+    }
+  })
+
   it('時計が巻き戻っても、戻った分だけ余計に通すことはない', () => {
     let state = undefined as ReturnType<typeof consume>['state'] | undefined
     for (let i = 0; i < CAP; i++) state = consume(state, 10_000).state
@@ -68,6 +90,16 @@ describe('CreateLimiter（Durable Object）', () => {
     const blocked = await stub.take()
     expect(blocked.ok).toBe(false)
     expect(blocked.retryAfterMs).toBeGreaterThan(0)
+  })
+
+  it('止めた呼び出しはストレージへ書かない（攻撃の洪水が書き込み回数の上限を食わない）', async () => {
+    const stub = stubOf('t-no-write-on-deny')
+    for (let i = 0; i < CAP; i++) await stub.take()
+    const read = () =>
+      runInDurableObject(stub, async (_i, state) => JSON.stringify(state.storage.kv.get('bucket')))
+    const before = await read()
+    for (let i = 0; i < 5; i++) expect((await stub.take()).ok).toBe(false)
+    expect(await read()).toBe(before)
   })
 
   it('同時に何本来ても、通るのは容量ぶんちょうど（強整合＝この制限の存在理由）', async () => {
