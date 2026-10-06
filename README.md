@@ -171,7 +171,7 @@ Measured with `gzip -9` (each file separately) after `npm run build:client`, at 
 | Service worker (does not block first paint, 2026-09-19) | 1,118 B |
 | Every asset the app can ever fetch (2026-09-19) | 48,634 B — see note below |
 | Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests (run 2026-10-06) | **314** (26 files) |
+| Tests (run 2026-10-06) | **316** (26 files) |
 | Room auto-deletion | 365 days after the last successful passphrase entry (creation counts); writing does not extend it |
 | Ciphertext ceiling enforced by the server | 256 KiB |
 
@@ -208,7 +208,7 @@ joining one without a QR entry ticket, still needs the server.
 ```bash
 npm test         # rebuilds the client, runs eight consistency checks (privacy config, word list,
                  # icons, public surface, stored fields, privacy-policy rows and quotes, license
-                 # banner), then the 314 tests
+                 # banner), then the 316 tests
 npx vitest run   # the tests alone
 npm run typecheck
 npm run build:wordlist   # regenerates the word list, its bundled copy and wordlist/review.md
