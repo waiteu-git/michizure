@@ -169,7 +169,7 @@ Measured with `gzip -9` (each file separately) after `npm run build:client`, at 
 | Service worker (does not block first paint, 2026-09-19) | 1,118 B |
 | Every asset the app can ever fetch (2026-09-19) | 48,634 B — see note below |
 | Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests (run 2026-09-19) | **302** (25 files) |
+| Tests (run 2026-10-06) | **314** (26 files) |
 | Room auto-deletion | 365 days after the last successful passphrase entry (creation counts); writing does not extend it |
 | Ciphertext ceiling enforced by the server | 256 KiB |
 
@@ -206,7 +206,7 @@ joining one without a QR entry ticket, still needs the server.
 ```bash
 npm test         # rebuilds the client, runs eight consistency checks (privacy config, word list,
                  # icons, public surface, stored fields, privacy-policy rows and quotes, license
-                 # banner), then the 302 tests
+                 # banner), then the 314 tests
 npx vitest run   # the tests alone
 npm run typecheck
 npm run build:wordlist   # regenerates the word list, its bundled copy and wordlist/review.md
@@ -265,13 +265,19 @@ entry **replaces** the deployed secret.
   without failures. Because our code cannot tell clients apart, the block lands on the room rather
   than on whoever caused it. While a room is locked, entering it — and deleting it — is refused;
   devices that already hold an unexpired token keep syncing.
-- **Room creation is unauthenticated, and its rate limit is weak.** `handleCreateRoom` consults one
-  Workers Rate Limiting binding (20 requests per 60 s, a single key shared by all callers because our
-  code does not read IP addresses). Cloudflare documents that binding as permissive and eventually
-  consistent, not meant for exact counting, and in a production test on 2026-09-18 about 195
-  consecutive requests never received a 429. Treat it as a speed bump, not a limit. The realistic
-  cost is junk ciphertext (up to 256 KiB per room, kept until the 365-day auto-delete) and free-tier
-  consumption. We plan to replace it with a Durable Object counter after submission.
+- **Room creation is unauthenticated, and its rate limit is one global bucket.** `handleCreateRoom`
+  takes a token from a single Durable Object (`CreateLimiter`; a token bucket holding 20, refilled at
+  20 per 60 s). A Durable Object serves one request at a time, so concurrent callers cannot exceed the
+  limit. The first version used Cloudflare's Workers Rate Limiting binding instead; Cloudflare documents
+  it as permissive and eventually consistent, not meant for exact counting, and in a production test on
+  2026-09-18 about 195 consecutive requests never received a 429 — which is why it was replaced.
+  Because our code does not read IP addresses, the bucket is one shared key: a single caller can use it
+  up and stop everyone else from creating rooms for a minute (429 with `Retry-After`); entering, syncing
+  and deleting existing rooms are unaffected. If the counter cannot answer, creation is refused (503)
+  rather than allowed unthrottled. The counter stores two numbers (tokens left, last update time) and
+  nothing about the caller. **The limit bounds the rate, not the total:** at most 28,800 rooms a day,
+  each up to 256 KiB of ciphertext and kept until the 365-day auto-delete, so a sustained abuser could
+  still fill the free tier within days.
 - **The 20-member cap is a client-side check, and not a complete one.** Only the "add member" button
   applies it. Importing an old file and merging two devices' offline edits do not re-check it, so a
   room can end up with more than 20 members. The server cannot check it either: the member list is
