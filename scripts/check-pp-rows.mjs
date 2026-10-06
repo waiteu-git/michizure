@@ -24,7 +24,7 @@ if (process.argv[2] === undefined && !existsSync(ppPath)) {
   console.log('PP の行の照合: 省略（docs/legal/privacy-policy.draft.md は公開リポジトリに含まれない）')
   process.exit(0)
 }
-const { SERVER_STORED } = await import(join(root, 'src/server-stored-fields.ts'))
+const { SERVER_STORED, SERVER_STORED_LIMITER } = await import(join(root, 'src/server-stored-fields.ts'))
 const { DEVICE_STORED } = await import(join(root, 'src/client/device-stored-fields.ts'))
 
 /** PP の見出し `## <節>` から次の `## ` までにある表の1列目（太字を外す・見出し行と区切り行は除く） */
@@ -45,7 +45,7 @@ function rowsOf(md, section) {
 
 const md = readFileSync(ppPath, 'utf8')
 const targets = [
-  { section: '2.', label: 'PP §2（サーバー）', decl: SERVER_STORED.room, file: 'src/server-stored-fields.ts' },
+  { section: '2.', label: 'PP §2（サーバー）', decl: { ...SERVER_STORED.room, ...SERVER_STORED_LIMITER }, file: 'src/server-stored-fields.ts' },
   { section: '2.1', label: 'PP §2.1（端末）', decl: DEVICE_STORED, file: 'src/client/device-stored-fields.ts' },
 ]
 

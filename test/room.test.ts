@@ -1,6 +1,6 @@
 import { SELF, env, runInDurableObject } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
-import type { Room } from '../src/room'
+import type { TripRoom } from '../src/room'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 import { MAX_CIPHERTEXT_BYTES, ciphertextBytes } from '../src/types'
@@ -39,17 +39,19 @@ describe('部屋の作成', () => {
   })
 
   it('速度制限に引っかかると 429 を返す', async () => {
-    // ⚠ test/setup.ts が ROOM_CREATE_LIMITER を常に成功させている（本番の
-    // しきい値をテストの都合で決めないため）。ここだけ一時的に差し替えて、
-    // handleCreateRoom が実際に 429 を返す配線を確かめる
-    const original = env.ROOM_CREATE_LIMITER
-    env.ROOM_CREATE_LIMITER = { limit: async () => ({ success: false }) }
+    // handleCreateRoom が「カウンタが止めた時に 429 を返す」配線を確かめる。
+    // カウンタを偽物にして一時的に差し替える（本物のカウンタの振る舞いは create-limiter.test.ts）
+    const original = env.CREATE_LIMITER
+    env.CREATE_LIMITER = {
+      idFromName: (n: string) => n,
+      get: () => ({ take: async () => ({ ok: false, retryAfterMs: 1500 }) }),
+    } as unknown as typeof env.CREATE_LIMITER
     try {
       const res = await createRoom()
       expect(res.status).toBe(429)
       expect(await res.json()).toEqual({ error: 'rate_limited' })
     } finally {
-      env.ROOM_CREATE_LIMITER = original
+      env.CREATE_LIMITER = original
     }
   })
 
@@ -149,7 +151,7 @@ describe('入室', () => {
       body: JSON.stringify({ authKey: 'dummy' }),
     })
     const stub = env.ROOM.get(env.ROOM.idFromName(ghost))
-    const dump = await runInDurableObject(stub, async (i: Room) => i.dumpForTest())
+    const dump = await runInDurableObject(stub, async (i: TripRoom) => i.dumpForTest())
     expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 

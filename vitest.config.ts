@@ -7,7 +7,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.toml' } })],
   test: {
-    // 部屋作成の速度制限（ROOM_CREATE_LIMITER）をテストの都合で緩めないための無効化。
+    // 部屋作成の速度制限（CREATE_LIMITER）をテストの都合で緩めないために、各テストの前に残量を空へ戻す。
     // 理由は test/setup.ts のコメントを見ること
     setupFiles: ['./test/setup.ts'],
   },

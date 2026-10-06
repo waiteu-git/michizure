@@ -84,7 +84,7 @@ const updated = { ...state, bookings: [...state.bookings, { id: crypto.randomUUI
 const putRes = await fetch(`${BASE}/api/rooms/${created.roomId}/blob`, {
   method: 'PUT',
   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ ...(await seal(second.encKeyBits, updated)), blobVersion: 1 }),
+  body: JSON.stringify({ ...(await seal(second.encKeyBits, updated)), blobVersion: 1, baseRev: 1 }), // 作成直後の版は 1（2026-09-07 から更新に baseRev が要る）
 })
 check('更新できる', putRes.status === 200)
 

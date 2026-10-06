@@ -1,5 +1,6 @@
 import { generateRoomId, issueToken, verifyToken } from './token.ts'
 import { toBase64 } from './keys.ts'
+import type { CreateLimiter } from './create-limiter.ts'
 import {
   MAX_CIPHERTEXT_BYTES,
   MAX_REQUEST_BYTES,
@@ -12,14 +13,15 @@ import {
   type Blob,
 } from './types.ts'
 
-export { Room } from './room.ts'
+export { TripRoom } from './room.ts'
+export { CreateLimiter } from './create-limiter.ts'
 
 export interface Env {
   ROOM: DurableObjectNamespace
   TOKEN_SECRET: string
   ASSETS: Fetcher
-  /** ⚠ 部屋作成の速度制限。キーは固定文字列＝クライアントを区別しない全体の上限（IPを読まない方針のため） */
-  ROOM_CREATE_LIMITER: RateLimit
+  /** ⚠ 部屋作成の速度制限（Durable Object の強整合なカウンタ）。名前は固定＝クライアントを区別しない全体の上限（IPを読まない方針のため） */
+  CREATE_LIMITER: DurableObjectNamespace<CreateLimiter>
 }
 
 function roomStub(env: Env, roomId: string) {
@@ -40,11 +42,24 @@ export function blobTooLarge(blob: Blob | undefined): boolean {
 }
 
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
-  // 🔴 無認証・無制限で世界に開いている唯一の書き込み経路。キーを固定文字列にしているのは
+  // 🔴 無認証・無制限で世界に開いている唯一の書き込み経路。カウンタの名前を固定にしているのは
   // クライアントを区別する手段（IP）を読まない方針のため＝これは【全体】の速度制限であって
-  // 特定の相手だけを絞る仕組みではない（2026-09-18、本番デプロイ直後の監査で追加）
-  const { success } = await env.ROOM_CREATE_LIMITER.limit({ key: 'room-create' })
-  if (!success) return Response.json({ error: 'rate_limited' }, { status: 429 })
+  // 特定の相手だけを絞る仕組みではない（2026-09-18、本番デプロイ直後の監査で追加）。
+  // 当初の Workers Rate Limiting binding は本番で効かなかった（公式が「正確な計数には使わない」と明記）ため、
+  // 2026-10 に Durable Object の強整合なカウンタへ置き換えた（src/create-limiter.ts）。
+  let take
+  try {
+    take = await env.CREATE_LIMITER.get(env.CREATE_LIMITER.idFromName('global')).take()
+  } catch {
+    // ⚠ 答えられない時に素通しにすると、気づかないまま無制限へ戻る。止めて、止まったと分かる形にする
+    return Response.json({ error: 'limiter_unavailable' }, { status: 503 })
+  }
+  if (!take.ok) {
+    return Response.json(
+      { error: 'rate_limited' },
+      { status: 429, headers: { 'Retry-After': String(Math.max(1, Math.ceil(take.retryAfterMs / 1000))) } },
+    )
+  }
 
   // 生の本文での足切りを更新側だけに置くと、作成経路から巨大な本文が入る
   const raw = await request.text()

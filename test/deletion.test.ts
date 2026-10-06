@@ -2,7 +2,7 @@ import { SELF, runInDurableObject, env } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
-import type { Room } from '../src/room'
+import type { TripRoom } from '../src/room'
 
 const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 
@@ -53,7 +53,7 @@ describe('部屋の削除', () => {
     const room = await createRoom()
     await del(room.roomId, room.authKey)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
+    const dump = await runInDurableObject(stub, async (instance: TripRoom) => instance.dumpForTest())
     expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 })
@@ -89,7 +89,7 @@ describe('削除の抜け道', () => {
 
     expect(await blobStatus(room.roomId, room.token)).toBe(404)
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    const dump = await runInDurableObject(stub, async (instance: Room) => instance.dumpForTest())
+    const dump = await runInDurableObject(stub, async (instance: TripRoom) => instance.dumpForTest())
     expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })
 
@@ -126,7 +126,7 @@ describe('認証の関門', () => {
   it('古い失敗は時間で減衰する', async () => {
     const room = await createRoom('けす')
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    await runInDurableObject(stub, async (i: Room) =>
+    await runInDurableObject(stub, async (i: TripRoom) =>
       i.setGateForTest({
         failures: 20,
         blockedUntil: Date.now() + 60 * 60 * 1000,
@@ -144,7 +144,7 @@ describe('認証の関門', () => {
   it('新しい失敗は減衰しない', async () => {
     const room = await createRoom('けす')
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    await runInDurableObject(stub, async (i: Room) =>
+    await runInDurableObject(stub, async (i: TripRoom) =>
       i.setGateForTest({
         failures: 20,
         blockedUntil: Date.now() + 60 * 60 * 1000,
@@ -165,7 +165,7 @@ describe('自動削除', () => {
   it('部屋を作ると1年後の alarm が仕掛かる', async () => {
     const room = await createRoom()
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    const at = await runInDurableObject(stub, async (_i: Room, state: DurableObjectState) =>
+    const at = await runInDurableObject(stub, async (_i: TripRoom, state: DurableObjectState) =>
       state.storage.getAlarm(),
     )
     expect(at).not.toBeNull()
@@ -177,7 +177,7 @@ describe('自動削除', () => {
   it('1年経過していれば alarm でデータが消える', async () => {
     const room = await createRoom()
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    await runInDurableObject(stub, async (instance: Room) => {
+    await runInDurableObject(stub, async (instance: TripRoom) => {
       await instance.setLastAccessForTest(Date.now() - 400 * 24 * 60 * 60 * 1000)
       await instance.alarm()
     })
@@ -187,7 +187,7 @@ describe('自動削除', () => {
   it('1年経過していなければ alarm でも消えない', async () => {
     const room = await createRoom()
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    await runInDurableObject(stub, async (instance: Room) => {
+    await runInDurableObject(stub, async (instance: TripRoom) => {
       await instance.setLastAccessForTest(Date.now() - 24 * 60 * 60 * 1000)
       await instance.alarm()
     })

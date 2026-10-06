@@ -11,39 +11,34 @@ preview_urls = false
 
 [[durable_objects.bindings]]
 name = "ROOM"
-class_name = "Room"
+class_name = "TripRoom"
+
+# 部屋の作成の速度制限（全体で1つ）のカウンタ。仕組みと根拠は src/create-limiter.ts。
+# 前身の Workers Rate Limiting binding（ROOM_CREATE_LIMITER）は、公式が「permissive・eventually consistent・
+# 正確な計数には使わない」と明記する道具で、本番では約195回連続でも429が一度も返らなかった（2026-09-18）ため撤去した。
+[[durable_objects.bindings]]
+name = "CREATE_LIMITER"
+class_name = "CreateLimiter"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
 
-# 🔴 部屋の作成は無認証・無制限（設計上 IP を読まないため）。2026-09-18 の監査で
-# 「コード側では防げない」という前提が偽と判明＝Workers Rate Limiting binding は
-# キーに任意の文字列を取り、IP を必要としない（公式もむしろ IP 使用を非推奨とする）。
-# ⇒ IP を読まない方針とそのまま両立する。前身 travel-calculation の事故（無認証入口が
-# 約1ヶ月見えっぱなしだった）と同じ形の穴を、本番へ出た初日に塞ぐ。
-# キーは固定文字列＝クライアントを区別しない【全体】の速度制限（handleCreateRoom 側で使用）。
-# namespace_id はこの Worker 内だけで一意ならよいローカルな番号（Cloudflare への事前登録は不要）。
-# ⚠ しきい値はテストの都合で決めていない（test/setup.ts でテスト実行中は無効化している）。
-# 個人〜小規模な知人間利用が前提の規模感で、実際の利用が1分に数件を超えることは
-# まず無い一方、無制限を「無制限でない」に倒すことが目的なので緩めに倒した。
-# ⚠ キーが固定文字列＝全利用者が1つのバケットを共有する。攻撃者が1人で使い切ると
-# 正規の利用者も部屋を作れなくなる（資源の無制限消費は防げるが、DoSの形は変わる）。
-# 粒度をどう分けるか（合言葉のハッシュ・セッション単位など）はPUBLIC反転の前提ではなく、
-# 提出後に見直してよい（2026-09-18の監査の指摘）。
-#
-# 🔴🔴 本番実測（2026-09-18）：約195回連続で叩いても一度も429を返さなかった。原因は
-# Cloudflareのバグではなく、公式ドキュメントがこの機能を「permissive・eventually
-# consistent・正確な計数には使わない設計」と明記しているとおりの挙動（カウンタは各マシンに
-# ローカルキャッシュされ非同期にしか反映されない・ダッシュボードにも表示されない）。
-# ⇒ セキュリティの歯止めとして、公式が「正確ではない」と明言する道具を使ってしまったのが
-# 問題の本体。提出後、Durable Object を使った
-# 強整合な自前カウンタに置き換えること。バインディング自体はそのままにしてある
-# （害は無く、置き換え後に外す）。
-[[ratelimits]]
-name = "ROOM_CREATE_LIMITER"
-namespace_id = "1001"
-simple = { limit = 20, period = 60 }
+# 新しいクラスを作る（v2）。取り消しのきく追加だけ。
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TripRoom", "CreateLimiter"]
+
+# 🔴🔴 v3 は【取り消せない】。`Room` クラスを削除する＝**本番の全部屋（動画に映る「沖縄旅行」を含む）が消える**。
+# 本人裁定（2026-10-01）: 本番で溜まった約195個のダミー部屋を、速度制限の置き換えと同じデプロイで片づける。
+# - Cloudflare は deleted_classes の適用時に「Worker のコードがそのクラスを参照していないこと」を要求する
+#   （公式 durable-object-class-migrations-legacy）。⇒ 同名で作り直せないので、クラスを `TripRoom` へ
+#   名前を変えた（`renamed_classes` ではない＝それはデータを引き継ぐ。ここは引き継がない）。
+# - v2（作成）→ v3（削除）は未適用のタグとして1回のアップロードで順に適用される（原子的）。
+# ⚠ 実際の利用者が現れた後は選べない手順。適用済みのタグは書き換えない・消さない。
+[[migrations]]
+tag = "v3"
+deleted_classes = ["Room"]
 
 # ⚠ `[limits] cpu_ms` は【有料プラン専用】。無料プランでは deploy が
 # `CPU limits are not supported for the Free plan [code: 100328]` で失敗する

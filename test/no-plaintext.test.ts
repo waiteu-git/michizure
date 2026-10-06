@@ -2,7 +2,7 @@ import { SELF, runInDurableObject, env } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
-import type { Room } from '../src/room'
+import type { TripRoom } from '../src/room'
 
 const FAST = 100_000 // サーバーが受け付ける最小値（MIN_ITERATIONS）
 const SECRET_NAME = 'ヒミツノリョコウメイ'
@@ -48,7 +48,7 @@ describe('サーバーは平文を持たない', () => {
     const room = await createRoomWithSecrets()
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
 
-    const dump = await runInDurableObject(stub, async (instance: Room) => {
+    const dump = await runInDurableObject(stub, async (instance: TripRoom) => {
       return instance.dumpForTest()
     })
 

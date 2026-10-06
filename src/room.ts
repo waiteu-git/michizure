@@ -10,7 +10,7 @@ import {
   type RoomMeta,
 } from './types.ts'
 
-export class Room extends DurableObject {
+export class TripRoom extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === '/create') return this.handleCreate(request)

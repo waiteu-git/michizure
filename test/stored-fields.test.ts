@@ -2,7 +2,7 @@ import { SELF, runInDurableObject, env } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
-import type { Room } from '../src/room'
+import type { TripRoom } from '../src/room'
 import { SERVER_STORED } from '../src/server-stored-fields'
 
 const FAST = 100_000
@@ -63,7 +63,7 @@ async function exercise() {
   })
 
   const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
-  return JSON.parse(await runInDurableObject(stub, (i: Room) => i.dumpForTest())) as {
+  return JSON.parse(await runInDurableObject(stub, (i: TripRoom) => i.dumpForTest())) as {
     room?: { key: string; value: string }[]
     _storage_kv: Record<string, unknown>
   }
@@ -119,7 +119,7 @@ describe('改変したクライアントが余分な欄を足しても', () => {
 
   async function blobKeysOf(roomId: string) {
     const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
-    const dump = JSON.parse(await runInDurableObject(stub, (i: Room) => i.dumpForTest())) as {
+    const dump = JSON.parse(await runInDurableObject(stub, (i: TripRoom) => i.dumpForTest())) as {
       room: { key: string; value: string }[]
     }
     return Object.keys(JSON.parse(dump.room.find((r) => r.key === 'blob')!.value)).sort()
@@ -206,7 +206,7 @@ describe('部屋が消えた後の書き込み', () => {
     ).json()) as { roomId: string; token: string; rev: number }
     const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
     // 削除が途中まで走った状態を作る（meta だけ消す）
-    await runInDurableObject(stub, (i: Room) => (i as any).sql().exec("DELETE FROM room WHERE key = 'meta'"))
+    await runInDurableObject(stub, (i: TripRoom) => (i as any).sql().exec("DELETE FROM room WHERE key = 'meta'"))
 
     const res = await SELF.fetch(`https://example.com/api/rooms/${created.roomId}/blob`, {
       method: 'PUT',
@@ -236,7 +236,7 @@ describe('作成日時（createdAt）を持たない', () => {
     ).json()) as { roomId: string }
     const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
     // この変更の前に作られた部屋を再現する（meta に createdAt が入っている）
-    await runInDurableObject(stub, (i: Room) => {
+    await runInDurableObject(stub, (i: TripRoom) => {
       const sql = (i as any).sql()
       const meta = JSON.parse([...sql.exec("SELECT value FROM room WHERE key = 'meta'")][0].value as string)
       sql.exec("UPDATE room SET value = ? WHERE key = 'meta'", JSON.stringify({ ...meta, createdAt: 1234567890 }))
@@ -246,7 +246,7 @@ describe('作成日時（createdAt）を持たない', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ authKey }),
     })
-    const dump = JSON.parse(await runInDurableObject(stub, (i: Room) => i.dumpForTest())) as {
+    const dump = JSON.parse(await runInDurableObject(stub, (i: TripRoom) => i.dumpForTest())) as {
       room: { key: string; value: string }[]
     }
     const meta = JSON.parse(dump.room.find((r) => r.key === 'meta')!.value)

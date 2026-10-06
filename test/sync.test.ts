@@ -1,6 +1,6 @@
 import { SELF, env, runInDurableObject } from 'cloudflare:test'
 import { describe, it, expect } from 'vitest'
-import type { Room } from '../src/room'
+import type { TripRoom } from '../src/room'
 import { generateSalt, deriveKeys } from '../src/keys'
 import { seal } from '../src/box'
 
@@ -192,7 +192,7 @@ describe('WebSocket 中継', () => {
     expect(res.status).toBe(400)
 
     const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
-    const count = await runInDurableObject(stub, async (_i: Room, state: DurableObjectState) =>
+    const count = await runInDurableObject(stub, async (_i: TripRoom, state: DurableObjectState) =>
       state.getWebSockets().length,
     )
     expect(count).toBe(0)
@@ -392,7 +392,7 @@ describe('版の照合', () => {
 describe('接続の期限', () => {
   const expireAll = async (roomId: string) => {
     const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
-    await runInDurableObject(stub, (_i: Room, state: DurableObjectState) => {
+    await runInDurableObject(stub, (_i: TripRoom, state: DurableObjectState) => {
       for (const ws of state.getWebSockets()) {
         ws.serializeAttachment({ ...((ws.deserializeAttachment() as object) ?? {}), exp: 1 })
       }
