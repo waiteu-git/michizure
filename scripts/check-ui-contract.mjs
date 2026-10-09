@@ -39,5 +39,14 @@ if (!/isComposing/.test(app) || !/keyCode === 229/.test(app)) {
   fail('Enter 送信が変換確定（isComposing / keyCode 229）を除外していない＝名前を打って確定した瞬間に送信される')
 }
 
+// 4) PP・規約のリンク先は、埋まっているなら https の絶対URL（片方だけ・http・相対を出さない）
+const legal = readFileSync(join(root, 'src/client/legal-links.ts'), 'utf8')
+const urls = ['privacy', 'terms'].map((k) => legal.match(new RegExp(`${k}:\\s*'([^']*)'`))?.[1])
+if (urls.some((u) => u === undefined)) fail('src/client/legal-links.ts から privacy / terms を読めない（この検査を直す）')
+else if (urls.some((u) => u) && !urls.every((u) => /^https:\/\/\S+$/.test(u))) {
+  fail('legal-links.ts の privacy / terms は、両方を https:// の絶対URLで埋めるか、両方を空にする')
+}
+if (!/id="legalLinks"/.test(html)) fail('src/index.html に #legalLinks が無い')
+
 if (bad) process.exit(1)
 console.log('画面の約束事: hidden が勝つ・Enter 送信の id が実在・変換確定の Enter を除外')

@@ -100,6 +100,8 @@
          （2026-10-09 に実測: Web 版で『CSVで書き出す』『購入を復元』が出ていた）。常に hidden を勝たせる */
       [hidden] { display: none !important; }
       #bookings { margin-top: 1rem; }
+      #legalLinks { margin: 3rem 0 1.5rem; font-size: .8rem; }
+      #legalLinks a { color: inherit; }
       .row {
         display: flex; gap: .6rem; align-items: center; justify-content: space-between;
         padding: .5rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap;
@@ -358,6 +360,12 @@
         <button class="ghost danger" id="destroyRoomBtn">この旅行を完全に消す</button>
       </div>
     </section>
+
+    <!-- PP・規約へのリンク。URL は src/client/legal-links.ts（未決の間は出さない） -->
+    <footer id="legalLinks" class="muted" hidden>
+      <a id="privacyLink" target="_blank" rel="noopener">プライバシーポリシー</a> ・
+      <a id="termsLink" target="_blank" rel="noopener">利用規約</a>
+    </footer>
 
     <div id="toast"></div>
     <script type="module" src="/app.js"></script>

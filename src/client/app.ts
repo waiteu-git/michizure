@@ -24,6 +24,7 @@ import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins, billingKeys } from './origins.ts'
 import { getApiBase } from './config.ts'
+import { LEGAL_LINKS, legalLinksReady } from './legal-links.ts'
 import { entryFromHash, entryForRoom, entryUrl, emptyRoomForEntry } from './entry.ts'
 import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
 import { KDF_VERSION } from '../types.ts'
@@ -1338,6 +1339,12 @@ function setupTear() {
 }
 
 setupTear()
+
+if (legalLinksReady()) {
+  ;($('privacyLink') as HTMLAnchorElement).href = LEGAL_LINKS.privacy
+  ;($('termsLink') as HTMLAnchorElement).href = LEGAL_LINKS.terms
+  $('legalLinks').hidden = false
+}
 
 document.addEventListener('change', (e) => {
   const el = e.target as HTMLInputElement
