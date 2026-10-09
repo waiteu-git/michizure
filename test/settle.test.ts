@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parts, isDone, balances, advanced, settle, sharesOf, shareSummary } from '../src/client/settle'
+import { parts, isDone, balances, advanced, settle, sharesOf, shareSummary, memberInUse, totalAmount } from '../src/client/settle'
 import type { RoomState, Booking } from '../src/client/api'
 
 // 金額の計算は間違えると実害が出る。前身アプリの挙動をそのまま固定する
@@ -201,5 +201,29 @@ describe('端数を誰が負うかの表示', () => {
 
   it('1人なら全額をその人が負い、端数は出ない', () => {
     expect(shareSummary(101, ['a'], 'x')).toEqual({ base: 101, delta: 0, bearers: [] })
+  })
+})
+
+
+describe('メンバーの削除可否・合計', () => {
+  const bk = (o: Partial<Booking>): Booking =>
+    ({ id: 'x', category: '食費', description: '', payer: 'a', amount: 300, participants: ['a', 'b'], paid: {}, ...o }) as Booking
+  const st = (bookings: Booking[]): RoomState => ({ name: 't', startDate: null, endDate: null, members, bookings })
+
+  it('どの記録にも出てこないメンバーは消せる', () => {
+    expect(memberInUse(st([bk({})]), 'c')).toBe(false)
+    expect(memberInUse(st([]), 'a')).toBe(false)
+  })
+  it('立替人・対象者・払い済みのどれかに出てくれば、使われている', () => {
+    expect(memberInUse(st([bk({})]), 'a')).toBe(true)
+    expect(memberInUse(st([bk({})]), 'b')).toBe(true)
+    expect(memberInUse(st([bk({ participants: ['a'], paid: { c: true } })]), 'c')).toBe(true)
+  })
+  it('対象者が未設定（＝全員で割る）の記録があれば、全員が使われている', () => {
+    expect(memberInUse(st([bk({ participants: undefined as never })]), 'c')).toBe(true)
+  })
+  it('合計は記録の金額の和・件数つき', () => {
+    expect(totalAmount(st([bk({ amount: 100 }), bk({ amount: 250 })]))).toEqual({ amount: 350, count: 2 })
+    expect(totalAmount(st([]))).toEqual({ amount: 0, count: 0 })
   })
 })

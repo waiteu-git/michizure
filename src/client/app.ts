@@ -19,7 +19,7 @@ import {
   rememberEntry,
   forget,
 } from './session-store.ts'
-import { balances, advanced, settle, parts, isDone, shareSummary } from './settle.ts'
+import { balances, advanced, settle, parts, isDone, shareSummary, memberInUse, totalAmount } from './settle.ts'
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins, billingKeys } from './origins.ts'
@@ -824,9 +824,11 @@ async function doRestore() {
 
 function renderMembers() {
   if (!state) return
-  $('members').innerHTML =
-    state.members.map((m) => `<span class="chip on">${esc(m.name)}</span>`).join('') ||
-    '<span class="muted">まだ誰もいません。まず自分の名前を入れて追加してください</span>'
+  $('members').innerHTML = state.members.length
+    ? state.members
+        .map((m) => `<button type="button" class="chip on" data-member-edit="${esc(m.id)}">${esc(m.name)}</button>`)
+        .join('') + '<p class="muted">名前をタップすると、直したり（空にして）消したりできます</p>'
+    : '<span class="muted">まだ誰もいません。まず自分の名前を入れて追加してください</span>'
   const sel = $('payer') as HTMLSelectElement
   const keep = sel.value
   sel.innerHTML = state.members.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')
@@ -912,7 +914,10 @@ function renderSummary() {
   const nameOf = (id: string) => state!.members.find((m) => m.id === id)?.name ?? '?'
   const bal = balances(state)
   const adv = advanced(state)
-  $('summary').innerHTML = state.members
+  const total = totalAmount(state)
+  $('summary').innerHTML =
+    (total.count ? `<p class="muted">合計 ${yen(total.amount)}円（${total.count}件）</p>` : '') +
+    state.members
     .map((m) => {
       const r = Math.round(bal.get(m.id) ?? 0)
       const tag = r > 0 ? `受け取る ${yen(r)}円` : r < 0 ? `支払う ${yen(-r)}円` : '精算済み'
@@ -1094,6 +1099,28 @@ function addMember() {
   persist()
 }
 
+/** メンバー名をタップ → 名前を直す。空にすると削除（記録に使われていなければ） */
+function editMember(id: string) {
+  if (!state) return
+  const m = state.members.find((x) => x.id === id)
+  if (!m) return
+  const input = prompt('名前を直します。空にすると、このメンバーを消します。', m.name)
+  if (input === null) return
+  const name = input.trim()
+  if (!name) {
+    if (memberInUse(state, id)) return toast('記録に出てくるメンバーは消せません（先にその記録を直すか消してください）')
+    state.members = state.members.filter((x) => x.id !== id)
+    // 入力途中の「誰で割るか」から外す（残すと、消えた id を指したまま記録される）
+    if (formParts) formParts = formParts.filter((x) => x !== id)
+  } else {
+    m.name = name
+  }
+  renderMembers()
+  renderBookings()
+  renderSummary()
+  persist()
+}
+
 function saveBooking() {
   if (!state) return
   const amount = Number(($('amount') as HTMLInputElement).value)
@@ -1266,6 +1293,7 @@ document.addEventListener('click', (e) => {
   if (el.id === 'destroyRoomBtn') void destroyRoom()
   if (el.id === 'exportBtn') void doExport()
   if (el.id === 'restoreBtn') void doRestore()
+  if (el.dataset.memberEdit) editMember(el.dataset.memberEdit)
   if (el.dataset.edit) startEdit(el.dataset.edit)
   if (el.dataset.del) deleteBooking(el.dataset.del)
   if (el.dataset.part) {

@@ -145,3 +145,24 @@ export function settle(bals: Map<string, number>): Transfer[] {
   }
   return out
 }
+
+/**
+ * そのメンバーが、どこかの記録に出てくるか（立替人・対象者・払い済み）。
+ * ⚠ 対象者が未設定の記録は「全員で割る」＝全員がそこに居る扱い。
+ * 使われているメンバーを消すと、割り勘の対象から静かに外れて金額が変わる（`parts` は消えた id を落とす）ので、
+ * 消せるのは使われていない時だけにする。
+ */
+export function memberInUse(state: RoomState, id: string): boolean {
+  return state.bookings.some(
+    (b) =>
+      b.payer === id ||
+      !Array.isArray(b.participants) ||
+      b.participants.includes(id) ||
+      Object.prototype.hasOwnProperty.call(b.paid ?? {}, id),
+  )
+}
+
+/** 記録の合計（円）と件数。精算の見出しに出す */
+export function totalAmount(state: RoomState): { amount: number; count: number } {
+  return { amount: state.bookings.reduce((sum, b) => sum + b.amount, 0), count: state.bookings.length }
+}
