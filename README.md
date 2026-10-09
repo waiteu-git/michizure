@@ -206,9 +206,9 @@ server — stop it, reload, and you can still open the room and record expenses.
 joining one without a QR entry ticket, still needs the server.
 
 ```bash
-npm test         # rebuilds the client, runs eight consistency checks (privacy config, word list,
+npm test         # rebuilds the client, runs nine consistency checks (privacy config, word list,
                  # icons, public surface, stored fields, privacy-policy rows and quotes, license
-                 # banner), then the 316 tests
+                 # banner, UI contract), then the 316 tests
 npx vitest run   # the tests alone
 npm run typecheck
 npm run build:wordlist   # regenerates the word list, its bundled copy and wordlist/review.md

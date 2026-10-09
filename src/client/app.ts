@@ -825,7 +825,7 @@ function renderMembers() {
   if (!state) return
   $('members').innerHTML =
     state.members.map((m) => `<span class="chip on">${esc(m.name)}</span>`).join('') ||
-    '<span class="muted">まだ誰もいません</span>'
+    '<span class="muted">まだ誰もいません。まず自分の名前を入れて追加してください</span>'
   const sel = $('payer') as HTMLSelectElement
   const keep = sel.value
   sel.innerHTML = state.members.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')
@@ -889,7 +889,7 @@ function renderBookings() {
               ? `<br>端数の${yen(Math.abs(delta))}円は ${bearers.map((id) => esc(nameOf(id))).join('・')}`
               : ''
           })()}</div>
-        <div class="paid">${others
+        <div class="paid">${others.length ? '<span class="muted">払い済み：</span>' : ''}${others
           .map(
             (id) =>
               `<label><input type="checkbox" data-paid="${esc(b.id)}" data-member="${esc(id)}"
@@ -1346,6 +1346,26 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('input', (e) => {
   if ((e.target as HTMLElement).id === 'amount') renderFormParts()
+})
+
+// Enter で送る。⚠ 日本語入力の変換を確定する Enter は送信にしない（isComposing / keyCode 229）。
+// これを落とすと、名前を打って変換を確定した瞬間に送信され、未確定の文字ごと記録される
+const ENTER_SUBMITS: Record<string, string> = {
+  newName: 'createBtn',
+  customPass: 'createBtn',
+  joinRoom: 'joinBtn',
+  joinPass: 'joinBtn',
+  newMember: 'addMemberBtn',
+  description: 'saveBookingBtn',
+  amount: 'saveBookingBtn',
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return
+  const target = ENTER_SUBMITS[(e.target as HTMLElement).id]
+  if (!target) return
+  e.preventDefault()
+  const btn = $(target) as HTMLButtonElement
+  if (!btn.disabled) btn.click()
 })
 
 document.addEventListener('change', (e) => {

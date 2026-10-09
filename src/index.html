@@ -96,6 +96,10 @@
       }
       button.link { border: none; text-decoration: underline; padding: .3rem 0; }
       button[disabled] { opacity: .5; cursor: default; }
+      /* 🔴 hidden 属性が .actions など display を指定するクラスに負けると、隠したつもりの要素が出る
+         （2026-10-09 に実測: Web 版で『CSVで書き出す』『購入を復元』が出ていた）。常に hidden を勝たせる */
+      [hidden] { display: none !important; }
+      #bookings { margin-top: 1rem; }
       .row {
         display: flex; gap: .6rem; align-items: center; justify-content: space-between;
         padding: .5rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap;
@@ -304,8 +308,7 @@
       </p>
 
       <h2>記録</h2>
-      <div id="bookings"></div>
-
+      <!-- 入力はいちばん使う操作＝一覧の【上】に置く（一覧が伸びても、毎回下までスクロールしなくてよい） -->
       <div id="bookingForm">
         <label class="field"><span>種類</span>
           <select id="category">
@@ -328,6 +331,9 @@
           <button class="ghost" id="cancelEditBtn" hidden>やめる</button>
         </div>
       </div>
+
+      <div id="bookings"></div>
+
 
       <h2>精算</h2>
       <div id="summary"></div>
