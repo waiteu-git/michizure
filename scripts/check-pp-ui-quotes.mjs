@@ -15,6 +15,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { legalDocPaths } from './lib-legal-docs.mjs'
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -38,9 +39,10 @@ const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const flat = (s) => s.replaceAll('**', '').replace(/\n[ \t]*/g, '')
 // ⚠ PP・規約の下書きは公開リポジトリに含めない（履歴からも除外済み）＝公開クローンには無い。
 // 「見られなかった」と明示して通す（黙って通さない）
-const docPaths = ['docs/legal/privacy-policy.draft.md', 'docs/legal/terms.draft.md'].map((f) => join(root, f))
+const legal = legalDocPaths(root)
+const docPaths = [legal.privacy, legal.terms]
 if (!docPaths.every((f) => existsSync(f))) {
-  console.log('PP・規約の引用の照合: 省略（docs/legal/*.draft.md は公開リポジトリに含まれない）')
+  console.log('PP・規約の引用の照合: 省略（PP・規約の清書版・下書きは公開リポジトリに含まれない）')
   process.exit(0)
 }
 const docs = flat(docPaths.map((f) => readFileSync(f, 'utf8')).join(''))
