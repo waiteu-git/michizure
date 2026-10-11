@@ -25,6 +25,7 @@ import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins, billingKeys } from './origins.ts'
 import { getApiBase } from './config.ts'
 import { LEGAL_LINKS, legalLinksReady } from './legal-links.ts'
+import { createErrorMessage } from './create-error-copy.ts'
 import { entryFromHash, entryForRoom, entryUrl, emptyRoomForEntry } from './entry.ts'
 import { PBKDF2_ITERATIONS, deriveKeys } from '../keys.ts'
 import { KDF_VERSION } from '../types.ts'
@@ -240,7 +241,7 @@ async function doCreate() {
     $('showQr').textContent = 'QRを出す'
     show('created')
   } catch (e) {
-    toast(`作成に失敗しました: ${e instanceof Error ? e.message : e}`)
+    toast(createErrorMessage(e instanceof Error ? e.message : String(e)))
   } finally {
     $('createBtn').removeAttribute('disabled')
   }
