@@ -19,7 +19,7 @@ import {
   rememberEntry,
   forget,
 } from './session-store.ts'
-import { balances, advanced, settle, parts, isDone, shareSummary, memberInUse, totalAmount } from './settle.ts'
+import { balances, advanced, settle, parts, isDone, shareSummary, memberInUse, totalAmount, periodProblem } from './settle.ts'
 import type { BookingConflict } from './merge.ts'
 import { connectLive, disconnectLive, clientId } from './live.ts'
 import { shareOrigin, initOrigins, billingKeys } from './origins.ts'
@@ -769,6 +769,8 @@ function renderRoom() {
   if (!state) return
   if (session) warmForOffline(session.roomId)
   $('roomName').textContent = state.name
+  ;($('startDate') as HTMLInputElement).value = state.startDate ?? ''
+  ;($('endDate') as HTMLInputElement).value = state.endDate ?? ''
   startLive()
   renderMembers()
   renderBookings()
@@ -1373,6 +1375,23 @@ if (legalLinksReady()) {
   ;($('termsLink') as HTMLAnchorElement).href = LEGAL_LINKS.terms
   $('legalLinks').hidden = false
 }
+
+document.addEventListener('change', (e) => {
+  const id = (e.target as HTMLElement).id
+  if ((id !== 'startDate' && id !== 'endDate') || !state) return
+  const start = ($('startDate') as HTMLInputElement).value || null
+  const end = ($('endDate') as HTMLInputElement).value || null
+  const problem = periodProblem(start, end)
+  if (problem) {
+    // 保存せず、入力欄を保存済みの値へ戻す
+    ;($('startDate') as HTMLInputElement).value = state.startDate ?? ''
+    ;($('endDate') as HTMLInputElement).value = state.endDate ?? ''
+    return toast(problem)
+  }
+  state.startDate = start
+  state.endDate = end
+  persist()
+})
 
 document.addEventListener('change', (e) => {
   const el = e.target as HTMLInputElement

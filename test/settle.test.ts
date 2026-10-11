@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parts, isDone, balances, advanced, settle, sharesOf, shareSummary, memberInUse, totalAmount } from '../src/client/settle'
+import { parts, isDone, balances, advanced, settle, sharesOf, shareSummary, memberInUse, totalAmount, periodProblem } from '../src/client/settle'
 import type { RoomState, Booking } from '../src/client/api'
 
 // 金額の計算は間違えると実害が出る。前身アプリの挙動をそのまま固定する
@@ -225,5 +225,22 @@ describe('メンバーの削除可否・合計', () => {
   it('合計は記録の金額の和・件数つき', () => {
     expect(totalAmount(st([bk({ amount: 100 }), bk({ amount: 250 })]))).toEqual({ amount: 350, count: 2 })
     expect(totalAmount(st([]))).toEqual({ amount: 0, count: 0 })
+  })
+})
+
+describe('旅行期間の検査', () => {
+  it('両方空・片方だけ・同じ日・順序どおりは通す', () => {
+    expect(periodProblem(null, null)).toBeNull()
+    expect(periodProblem('2026-10-20', null)).toBeNull()
+    expect(periodProblem(null, '2026-10-22')).toBeNull()
+    expect(periodProblem('2026-10-20', '2026-10-20')).toBeNull()
+    expect(periodProblem('2026-10-20', '2026-10-22')).toBeNull()
+  })
+  it('終わりが始まりより前なら理由を返す', () => {
+    expect(periodProblem('2026-10-22', '2026-10-20')).toMatch(/終わり/)
+  })
+  it('日付の形でない値は理由を返す（壊れた入力を保存しない）', () => {
+    expect(periodProblem('2026-13-40', null)).not.toBeNull()
+    expect(periodProblem('あした', null)).not.toBeNull()
   })
 })

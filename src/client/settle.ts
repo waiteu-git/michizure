@@ -166,3 +166,14 @@ export function memberInUse(state: RoomState, id: string): boolean {
 export function totalAmount(state: RoomState): { amount: number; count: number } {
   return { amount: state.bookings.reduce((sum, b) => sum + b.amount, 0), count: state.bookings.length }
 }
+
+/**
+ * 旅行期間（yyyy-mm-dd）の検査。問題があれば利用者に見せる理由を返す。
+ * ⚠ 日付の形でない値・終わりが始まりより前の値は保存しない（CSV に「〜」つきで出る項目）。
+ */
+export function periodProblem(start: string | null, end: string | null): string | null {
+  const valid = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().startsWith(d)
+  for (const d of [start, end]) if (d && !valid(d)) return '日付の形が正しくありません'
+  if (start && end && end < start) return '終わりの日が、始まりの日より前になっています'
+  return null
+}

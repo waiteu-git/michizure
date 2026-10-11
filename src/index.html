@@ -288,6 +288,12 @@
       <button class="ghost small" id="rejoinBtn" hidden>合言葉で入り直す</button>
       <div id="conflict" hidden></div>
 
+      <!-- 旅行期間（任意）。CSV の「期間」に出る。片方だけでもよい -->
+      <div class="actions" id="period">
+        <label class="field" style="flex:1"><span>はじまり（任意）</span><input id="startDate" type="date" /></label>
+        <label class="field" style="flex:1"><span>おわり（任意）</span><input id="endDate" type="date" /></label>
+      </div>
+
       <h2>メンバー</h2>
       <div id="members"></div>
       <div class="actions">
