@@ -38,9 +38,17 @@ describe('合言葉の生成', () => {
   })
 
   it('生成した合言葉は下限を余裕で超える', () => {
-    for (let i = 0; i < 20; i++) {
-      expect(estimateBits(generatePassphrase())).toBeGreaterThan(MIN_CUSTOM_BITS)
+    // 本当の強さは語数で決まる（語は一様に選ぶ＝1語あたり log2(語数) ビット）。これは確率に依らない
+    expect(PASSPHRASE_WORDS * Math.log2(WORDS.length)).toBeGreaterThan(MIN_CUSTOM_BITS + 8)
+    // 推定器は目安であって、同じ字が続く並びなどを低く見積もることがある（生成した合言葉の
+    // 約 0.015% が下限以下＝20回の全件判定は約330回に1回落ちた。2026-10-12 に実測して直した）。
+    // 「全件が下限超え」ではなく「ほぼ全件」で見る＝偶然では落ちず、推定器が壊れれば落ちる
+    const n = 400
+    let weak = 0
+    for (let i = 0; i < n; i++) {
+      if (estimateBits(generatePassphrase()) <= MIN_CUSTOM_BITS) weak++
     }
+    expect(weak).toBeLessThanOrEqual(2)
   })
 })
 

@@ -44,7 +44,7 @@ So this is not a better spreadsheet. It is a **narrower tool that gives up diffe
 | Accounts, sign-up, password reset | A room is a URL plus a passphrase. Nothing to create, nothing to lose but the passphrase |
 | The server being able to read your data | It is also **unable to help you recover it**: we cannot reset or recover a lost passphrase |
 | Reading IP addresses in our own code | Nothing in our code can tell one client from another, so nothing throttles per client. Passphrase guesses are backed off per room (which lets anyone lock a room — see Limitations); room creation has one global limit that did not enforce in production when we measured it on 2026-09-18. **This does not mean no IP is recorded anywhere** — see below |
-| A framework | **18,746 bytes gzipped** before the app is usable, and it keeps working with no network |
+| A framework | **20,077 bytes gzipped** before the app is usable, and it keeps working with no network |
 | Automatic resolution of conflicting edits | When two devices change the *same expense*, you are **shown both versions and asked to choose**; until you do, this device sends nothing to the server. Edits that do not collide still merge automatically |
 
 ## What the server actually holds
@@ -159,19 +159,19 @@ signal must decide what a paying user sees when RevenueCat cannot be reached.
 
 ## Measured numbers
 
-Measured with `gzip -9` (each file separately) after `npm run build:client`, at commit `f14caad`. **Every measured row carries its own measurement date**; the last two rows are constants read from `src/types.ts` at that commit, not measurements. The first-load figure has been quoted as 9,441, 10,864, 11,402, 11,493, 17,893, 18,454 and now 18,746 B. **Only the first move (9,441 → 10,864 B) was a measurement correction**; every later move followed real code. The last two: +561 B was the MIT redistribution banner (+657 B) net of −96 B from everything else, and +292 B (all in `app.js`) is the pending-conflict sync fix. The RevenueCat SDK itself stays lazy-loaded and is confirmed absent from the static chunks (re-checked 2026-09-19 against esbuild's metafile; `build:client` deletes `.build-meta.json` at the end, so re-run the esbuild step alone to regenerate it). A measured number without a date in this table is a bug.
+Measured with `gzip -9` (each file separately) after `npm run build:client`, at commit `f98c716` (the rows dated 2026-09-19 are unchanged in method; the ones dated 2026-10-12 were re-measured the same way). **Every measured row carries its own measurement date**; the last two rows are constants read from `src/types.ts` at that commit, not measurements. The first-load figure has been quoted as 9,441, 10,864, 11,402, 11,493, 17,893, 18,454, 18,746 and now 20,077 B. **Only the first move (9,441 → 10,864 B) was a measurement correction**; every later move followed real code. The last two: +561 B was the MIT redistribution banner (+657 B) net of −96 B from everything else, and +292 B (all in `app.js`) is the pending-conflict sync fix. **The latest move (18,746 → 20,077 B, 2026-10-12) followed real code**: the 2026-10 UI work (member editing, totals, trip period, legal-link footer, room-creation error copy) — HTML +229, `app.js` +759, one shared chunk +343. The RevenueCat SDK itself stays lazy-loaded and is confirmed absent from the static chunks (re-checked 2026-09-19 against esbuild's metafile; `build:client` deletes `.build-meta.json` at the end, so re-run the esbuild step alone to regenerate it). A measured number without a date in this table is a bug.
 
 "Before the app is usable" is `index.html` plus `app.js` plus every chunk reachable from `app.js` through static `import` statements; every other chunk is lazy.
 
 | | |
 |---|---|
-| **Before the app is usable** (2026-09-19) | **18,746 B** — HTML 4,591 + app 10,933 + three shared chunks (913 + 1,360 + 949) |
+| **Before the app is usable** (2026-10-12) | **20,077 B** — HTML 4,820 + app 11,692 + three shared chunks (913 + 1,360 + 1,292) |
 | Fetched only when creating a room (2026-09-19) | 4,789 B (word list + passphrase generation) |
 | Fetched only when importing old data (2026-09-19) | 1,173 B |
-| Service worker (does not block first paint, 2026-09-19) | 1,118 B |
-| Every asset the app can ever fetch (2026-09-19) | 48,634 B — see note below |
+| Service worker (does not block first paint, 2026-10-12) | 1,120 B |
+| Every asset the app can ever fetch (2026-10-12) | 49,968 B — see note below (same definition as 2026-09-19: 17 JavaScript files) |
 | Key derivation, 600,000 PBKDF2 iterations | **70 ms** — one Android device, Chrome 151, median of 3 (2026-08-14) |
-| Tests (run 2026-10-06) | **316** (26 files) |
+| Tests (run 2026-10-12) | **329** (28 files) |
 | Room auto-deletion | 365 days after the last successful passphrase entry (creation counts); writing does not extend it |
 | Ciphertext ceiling enforced by the server | 256 KiB |
 
@@ -208,7 +208,7 @@ joining one without a QR entry ticket, still needs the server.
 ```bash
 npm test         # rebuilds the client, runs nine consistency checks (privacy config, word list,
                  # icons, public surface, stored fields, privacy-policy rows and quotes, license
-                 # banner, UI contract), then the 316 tests
+                 # banner, UI contract), then the 329 tests
 npx vitest run   # the tests alone
 npm run typecheck
 npm run build:wordlist   # regenerates the word list, its bundled copy and wordlist/review.md
