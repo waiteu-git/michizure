@@ -127,17 +127,17 @@ artifact and see where it talks to. A build-time constant would be invisible.
 
 ## Monetization
 
-**RevenueCat is integrated**, in the native (Capacitor) shell only — the web build does nothing
-with it. It powers a single one-time purchase, gating a CSV export of the room's expenses and
-settlement. Configuration, purchase, and restore live in `src/client/billing.ts`; the exported
+**The released web app has no purchase and no payment of any kind.** RevenueCat is integrated in the
+optional native (Capacitor) shell only — the web build does nothing with it, and no shell is
+distributed. It was built to gate a single one-time purchase for a CSV export of the room's expenses
+and settlement. Configuration, purchase, and restore live in `src/client/billing.ts`; the exported
 file itself is built in `src/client/csv.ts` and handed to the OS share sheet by
 `src/client/export-share.ts`.
 
-**In this submission the purchase runs against RevenueCat's Test Store**, as the demo video shows;
-the app is not released to any store, so no real-money purchase is possible yet. The RevenueCat
-public keys are not in the repository (the `michizure-revenuecat-*-key` meta tags are empty until the
-shell is built with `MICHIZURE_REVENUECAT_IOS_KEY` / `MICHIZURE_REVENUECAT_ANDROID_KEY`), so a shell
-built from a fresh clone cannot complete a purchase.
+The RevenueCat public keys are not in the repository (the `michizure-revenuecat-*-key` meta tags are
+empty until the shell is built with `MICHIZURE_REVENUECAT_IOS_KEY` / `MICHIZURE_REVENUECAT_ANDROID_KEY`),
+so a shell built from a fresh clone cannot complete a purchase. The purchase was only ever exercised
+against RevenueCat's Test Store; no real-money purchase has ever been possible.
 
 The hard part is not checkout. It is that **this app has no accounts**, so there is no user to
 attach an entitlement to. Three options exist, and each costs something real:
