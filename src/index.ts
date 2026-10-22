@@ -17,7 +17,7 @@ export { TripRoom } from './room.ts'
 export { CreateLimiter } from './create-limiter.ts'
 
 export interface Env {
-  ROOM: DurableObjectNamespace
+  TRIP_ROOM: DurableObjectNamespace
   TOKEN_SECRET: string
   ASSETS: Fetcher
   /** ⚠ 部屋作成の速度制限（Durable Object の強整合なカウンタ）。名前は固定＝クライアントを区別しない全体の上限（IPを読まない方針のため） */
@@ -25,7 +25,7 @@ export interface Env {
 }
 
 function roomStub(env: Env, roomId: string) {
-  return env.ROOM.get(env.ROOM.idFromName(roomId))
+  return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(roomId))
 }
 
 /** authKey をそのまま保存しないためのハッシュ。ストレージが漏れても認証には使えない */

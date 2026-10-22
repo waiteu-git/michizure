@@ -9,8 +9,13 @@ compatibility_date = "2026-08-01"
 # 予定なので、これが無いと「直す前の版」が旧 preview URL で恒久的に読める状態になる。
 preview_urls = false
 
+# 🔴 binding の名前は `TRIP_ROOM`（以前は `ROOM`）。2026-10-22 の本番デプロイを Cloudflare が
+# `Cannot apply --delete-class migration to class 'Room' without also removing the binding that
+# references it [code: 10061]` で拒否した。本番に残る旧 binding（名前 ROOM → class Room）を
+# 同名のまま TripRoom へ付け替えると「消していない」と数えられたと見て、名前ごと変えて旧 binding を外す。
+# ⚠ これで通るかも、実際に deploy するまで分からない（dry-run は migration を評価しない）。
 [[durable_objects.bindings]]
-name = "ROOM"
+name = "TRIP_ROOM"
 class_name = "TripRoom"
 
 # 部屋の作成の速度制限（全体で1つ）のカウンタ。仕組みと根拠は src/create-limiter.ts。

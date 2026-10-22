@@ -9,6 +9,6 @@ describe('worker', () => {
   })
 
   it('DO バインディングが存在する', () => {
-    expect(env.ROOM).toBeDefined()
+    expect(env.TRIP_ROOM).toBeDefined()
   })
 })

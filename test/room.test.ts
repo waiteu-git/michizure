@@ -150,7 +150,7 @@ describe('入室', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ authKey: 'dummy' }),
     })
-    const stub = env.ROOM.get(env.ROOM.idFromName(ghost))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(ghost))
     const dump = await runInDurableObject(stub, async (i: TripRoom) => i.dumpForTest())
     expect(JSON.parse(dump)).toEqual({ _storage_kv: {} })
   })

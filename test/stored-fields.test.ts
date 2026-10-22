@@ -62,7 +62,7 @@ async function exercise() {
     body: JSON.stringify({ ...(await sealed('更新')), baseRev: created.rev }),
   })
 
-  const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
+  const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(created.roomId))
   return JSON.parse(await runInDurableObject(stub, (i: TripRoom) => i.dumpForTest())) as {
     room?: { key: string; value: string }[]
     _storage_kv: Record<string, unknown>
@@ -118,7 +118,7 @@ describe('改変したクライアントが余分な欄を足しても', () => {
   const EXTRA = { plaintext: '山田太郎・居酒屋・6000円', debug: { note: 'わざと足した欄' } }
 
   async function blobKeysOf(roomId: string) {
-    const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(roomId))
     const dump = JSON.parse(await runInDurableObject(stub, (i: TripRoom) => i.dumpForTest())) as {
       room: { key: string; value: string }[]
     }
@@ -204,7 +204,7 @@ describe('部屋が消えた後の書き込み', () => {
         body: JSON.stringify({ salt, authKey, blob: { ...(await seal(encKeyBits, { name: '作成' })), blobVersion: 1 }, iterations: FAST, kdfVersion: 1 }),
       })
     ).json()) as { roomId: string; token: string; rev: number }
-    const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(created.roomId))
     // 削除が途中まで走った状態を作る（meta だけ消す）
     await runInDurableObject(stub, (i: TripRoom) => (i as any).sql().exec("DELETE FROM room WHERE key = 'meta'"))
 
@@ -234,7 +234,7 @@ describe('作成日時（createdAt）を持たない', () => {
         body: JSON.stringify({ salt, authKey, blob: { ...(await seal(encKeyBits, { name: '作成' })), blobVersion: 1 }, iterations: FAST, kdfVersion: 1 }),
       })
     ).json()) as { roomId: string }
-    const stub = env.ROOM.get(env.ROOM.idFromName(created.roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(created.roomId))
     // この変更の前に作られた部屋を再現する（meta に createdAt が入っている）
     await runInDurableObject(stub, (i: TripRoom) => {
       const sql = (i as any).sql()

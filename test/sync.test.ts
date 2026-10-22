@@ -191,7 +191,7 @@ describe('WebSocket 中継', () => {
     expect(res.webSocket).toBeFalsy()
     expect(res.status).toBe(400)
 
-    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(room.roomId))
     const count = await runInDurableObject(stub, async (_i: TripRoom, state: DurableObjectState) =>
       state.getWebSockets().length,
     )
@@ -391,7 +391,7 @@ describe('版の照合', () => {
  */
 describe('接続の期限', () => {
   const expireAll = async (roomId: string) => {
-    const stub = env.ROOM.get(env.ROOM.idFromName(roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(roomId))
     await runInDurableObject(stub, (_i: TripRoom, state: DurableObjectState) => {
       for (const ws of state.getWebSockets()) {
         ws.serializeAttachment({ ...((ws.deserializeAttachment() as object) ?? {}), exp: 1 })

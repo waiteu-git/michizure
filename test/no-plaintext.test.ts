@@ -46,7 +46,7 @@ describe('サーバーは平文を持たない', () => {
 
   it('DO のストレージに平文も合言葉も authKey も残らない', async () => {
     const room = await createRoomWithSecrets()
-    const stub = env.ROOM.get(env.ROOM.idFromName(room.roomId))
+    const stub = env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(room.roomId))
 
     const dump = await runInDurableObject(stub, async (instance: TripRoom) => {
       return instance.dumpForTest()
@@ -81,8 +81,8 @@ describe('サーバーは平文を持たない', () => {
  */
 describe('検査そのものが効いているか', () => {
   it('KV に書いた値が dumpForTest に現れる（現れなければ平文検査は空振り）', async () => {
-    const id = env.ROOM.idFromName('canary-room')
-    const stub = env.ROOM.get(id)
+    const id = env.TRIP_ROOM.idFromName('canary-room')
+    const stub = env.TRIP_ROOM.get(id)
     const dump = await runInDurableObject(stub, async (instance: any, ctx: any) => {
       await ctx.storage.put('canary', 'ヒミツノアイコトバ')
       return instance.dumpForTest()
