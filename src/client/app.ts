@@ -1200,7 +1200,7 @@ function deleteBooking(id: string) {
   const b = state.bookings.find((x) => x.id === id)
   if (!b) return
   // 消すのは戻せないので、何を消すのか見せてから聞く
-  if (!confirm(`「${b.description || b.category}／${yen(b.amount)}円」を消します。よろしいですか。`)) return
+  if (!confirm(`「${b.description || b.category}／${yen(b.amount)}円」を消します。`)) return
   state.bookings = state.bookings.filter((x) => x.id !== id)
   if (editingId === id) cancelEdit()
   renderBookings()

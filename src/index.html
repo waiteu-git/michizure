@@ -179,11 +179,12 @@
       <h2>新しい旅行を作る</h2>
       <label class="field"><span>旅行の名前</span>
         <input id="newName" placeholder="沖縄旅行" /></label>
-      <label class="field"><span>合言葉（空のままなら自動で作ります）</span>
+      <label class="field"><span>合言葉</span>
         <input id="customPass" placeholder="自動生成" autocomplete="off" /></label>
       <button id="createBtn">作る</button>
 
-      <details style="margin-top:1.2rem">
+      <!-- 公開版の利用者に「前のアプリ」は無いので出さない（取り込みの処理は残してある） -->
+      <details style="margin-top:1.2rem" id="importBox" hidden>
         <summary class="muted">前のアプリのデータを引き継ぐ</summary>
         <p class="muted">前のアプリで「エクスポート」して保存した JSON ファイルを選んでください。
           読み込んでも、前のアプリのデータはそのままです。</p>
@@ -278,7 +279,6 @@
         <button id="joinBtn">入る</button>
         <button class="ghost" id="toHome">戻る</button>
       </div>
-      <p class="muted">区切りは中黒でも空白でも構いません。カタカナで打っても入れます。</p>
     </section>
 
     <section id="room" hidden>
@@ -290,8 +290,8 @@
 
       <!-- 旅行期間（任意）。CSV の「期間」に出る。片方だけでもよい -->
       <div class="actions" id="period">
-        <label class="field" style="flex:1"><span>はじまり（任意）</span><input id="startDate" type="date" /></label>
-        <label class="field" style="flex:1"><span>おわり（任意）</span><input id="endDate" type="date" /></label>
+        <label class="field" style="flex:1"><span>はじまり</span><input id="startDate" type="date" /></label>
+        <label class="field" style="flex:1"><span>おわり</span><input id="endDate" type="date" /></label>
       </div>
 
       <h2>メンバー</h2>
@@ -363,7 +363,7 @@
 
       <div class="actions" style="margin-top:2.5rem">
         <button class="ghost" id="toHome">入口に戻る</button>
-        <button class="ghost danger" id="destroyRoomBtn">この旅行を完全に消す</button>
+        <button class="ghost danger" id="destroyRoomBtn">この旅行を消す</button>
       </div>
     </section>
 
